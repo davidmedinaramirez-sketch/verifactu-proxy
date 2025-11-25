@@ -74,31 +74,6 @@ app.post("/debug/aeat", (req, res) => {
   }
 });
 
-    const r = https.request(options, (resp) => {
-      let data = "";
-
-      resp.on("data", (chunk) => (data += chunk));
-
-      resp.on("end", () => {
-        const status = resp.statusCode || 0;
-        const preview = data.slice(0, 1500); // primeras líneas
-        return res.send(`Status: ${status}\n\n${preview}`);
-      });
-    });
-
-    r.on("error", (err) => {
-      console.error("Error mTLS:", err);
-      return res.status(500).send("Error mTLS: " + err.message);
-    });
-
-    r.write(xml);
-    r.end();
-  } catch (e) {
-    console.error("Error interno:", e);
-    return res.status(500).send("Error interno en /debug/aeat: " + e.message);
-  }
-});
-
 // --------------------------------------------------------------
 
 const port = process.env.PORT || 3000;
