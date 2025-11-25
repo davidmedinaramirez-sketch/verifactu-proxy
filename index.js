@@ -66,7 +66,7 @@ app.get("/test-mtls", (req, res) => {
 });
 
 // =====================================================
-//     ENDPOINT /factura CON API KEY DE SEGURIDAD
+//     ENDPOINT /factura (con API KEY + validación JSON)
 // =====================================================
 
 const API_KEY = process.env.FACTURA_API_KEY || null;
@@ -90,15 +90,53 @@ app.post("/factura", (req, res) => {
     });
   }
 
-  // 3. Mostrar JSON recibido
-  console.log("📥 Factura recibida:");
-  console.log(JSON.stringify(req.body, null, 2));
+  const factura = req.body;
 
-  // 4. Respuesta
+  // 3. Validación mínima según tu schema oficial
+  const errores = [];
+
+  if (!factura.numero_factura)
+    errores.push("numero_factura es obligatorio");
+
+  if (!factura.fecha_emision)
+    errores.push("fecha_emision es obligatoria");
+
+  if (!factura.cliente_nombre)
+    errores.push("cliente_nombre es obligatorio");
+
+  if (typeof factura.total !== "number")
+    errores.push("total debe ser numérico");
+
+  if (errores.length > 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "Factura inválida",
+      detalles: errores,
+    });
+  }
+
+  // 4. Log útil de la info clave
+  console.log("📥 Factura recibida:");
+  console.log(
+    JSON.stringify(
+      {
+        numero_factura: factura.numero_factura,
+        tipo_factura: factura.tipo_factura,
+        fecha_emision: factura.fecha_emision,
+        cliente_nombre: factura.cliente_nombre,
+        cliente_nif: factura.cliente_nif,
+        total: factura.total,
+      },
+      null,
+      2
+    )
+  );
+
+  // 5. Respuesta
   res.json({
     ok: true,
     mensaje: "Factura recibida correctamente en el microservicio",
-    facturaRecibida: req.body,
+    facturaRecibida: factura,
   });
 });
 
@@ -222,4 +260,3 @@ app.get("/test-aeat", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor escuchando en puerto ${PORT}`);
 });
-
