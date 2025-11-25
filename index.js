@@ -189,4 +189,37 @@ app.get("/test-aeat", (req, res) => {
             ? respuestaAEAT.slice(0, 2000) + "\n...[truncado]..."
             : respuestaAEAT;
 
-        res.status(200).send("Código AEAT: " + response.statusCode + "\
+        const texto =
+          "Código AEAT: " +
+          response.statusCode +
+          "\n\nRespuesta:\n" +
+          resumen;
+
+        res.status(200).send(texto);
+      });
+    });
+
+    request.on("error", (err) => {
+      res.status(500).send("Error AEAT: " + err.message);
+    });
+
+    request.on("timeout", () => {
+      request.destroy();
+      res.status(504).send("Timeout AEAT");
+    });
+
+    request.write(bodyBuffer);
+    request.end();
+  } catch (err) {
+    res.status(500).send("Error preparando llamada AEAT: " + err.message);
+  }
+});
+
+// =====================================================
+//                 INICIAR SERVIDOR
+// =====================================================
+
+app.listen(PORT, () => {
+  console.log(`Servidor escuchando en puerto ${PORT}`);
+});
+
