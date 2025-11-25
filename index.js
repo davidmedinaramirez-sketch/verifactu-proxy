@@ -5,12 +5,12 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-// Middleware para entender JSON
+// Para recibir JSON
 app.use(express.json());
 
-// =======================
-//  CARGA DEL CERTIFICADO
-// =======================
+// =====================================================
+//   CARGA DEL CERTIFICADO FNMT DESDE SECRET FILE
+// =====================================================
 let certBuffer = null;
 let certPassphrase = process.env.FNMT_CERT_PASS || null;
 
@@ -31,7 +31,7 @@ try {
   console.warn("⚠️ No se pudo cargar el certificado FNMT:", err.message);
 }
 
-// Agente MTLS
+// Crear agente MTLS con pfx + passphrase
 function crearAgenteMTLS() {
   if (!certBuffer || !certPassphrase) {
     throw new Error("Certificado o contraseña no disponibles");
@@ -44,47 +44,72 @@ function crearAgenteMTLS() {
   });
 }
 
-// =======================
-//   RUTAS BÁSICAS
-// =======================
+// =====================================================
+//                    RUTAS BÁSICAS
+// =====================================================
 
+// Estado general
 app.get("/", (req, res) => {
-  const estadoCert = certBuffer ? "CARGADO" : "NO CARGADO";
-  res.send("Microservicio Verifactu en Render. Certificado: " + estadoCert);
+  const estado = certBuffer ? "CARGADO" : "NO CARGADO";
+  res.send("Microservicio Verifactu. Certificado: " + estado);
 });
 
+// Test MTLS (solo crea el agente)
 app.get("/test-mtls", (req, res) => {
   try {
     const agent = crearAgenteMTLS();
     const ok = typeof agent.createConnection === "function";
-    res.send("Agente MTLS creado correctamente. createConnection: " + ok);
+    res.send("Agente MTLS creado. createConnection=" + ok);
   } catch (err) {
     res.status(500).send("Error MTLS: " + err.message);
   }
 });
 
-// =======================
-//   PUNTO DE ENTRADA FACTURA
-// =======================
+// =====================================================
+//     ENDPOINT /factura CON API KEY DE SEGURIDAD
+// =====================================================
+
+const API_KEY = process.env.FACTURA_API_KEY || null;
 
 app.post("/factura", (req, res) => {
-  console.log("📥 Factura recibida:", JSON.stringify(req.body, null, 2));
+  // 1. Comprobación de que existe clave en el servidor
+  if (!API_KEY) {
+    return res.status(500).json({
+      ok: false,
+      error: "FACTURA_API_KEY no configurada en el servidor",
+    });
+  }
 
+  // 2. Comprobar cabecera enviada por Base44
+  const headerKey = req.headers["x-api-key"];
+
+  if (headerKey !== API_KEY) {
+    return res.status(401).json({
+      ok: false,
+      error: "No autorizado. API KEY incorrecta.",
+    });
+  }
+
+  // 3. Mostrar JSON recibido
+  console.log("📥 Factura recibida:");
+  console.log(JSON.stringify(req.body, null, 2));
+
+  // 4. Respuesta
   res.json({
     ok: true,
-    mensaje: "Factura recibida en el microservicio",
+    mensaje: "Factura recibida correctamente en el microservicio",
     facturaRecibida: req.body,
   });
 });
 
-// =======================
-//   TEST AEAT (SOAP)
-// =======================
+// =====================================================
+//               TEST AEAT (SOAP de prueba)
+// =====================================================
 
 app.get("/test-aeat", (req, res) => {
   let respuestaAEAT = "";
 
-  // ⚠️ CAMBIA TU_NIF_AQUI POR TU NIF REAL (2 veces)
+  // ⚠️ CAMBIA TU_NIF_AQUI (2 veces)
   const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
   xmlns:sum="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd"
@@ -164,37 +189,4 @@ app.get("/test-aeat", (req, res) => {
             ? respuestaAEAT.slice(0, 2000) + "\n...[truncado]..."
             : respuestaAEAT;
 
-        res
-          .status(200)
-          .send(
-            "Código AEAT: " +
-              response.statusCode +
-              "\n\nRespuesta:\n" +
-              resumen
-          );
-      });
-    });
-
-    request.on("error", (err) => {
-      res.status(500).send("Error AEAT: " + err.message);
-    });
-
-    request.on("timeout", () => {
-      request.destroy();
-      res.status(504).send("Timeout AEAT");
-    });
-
-    request.write(bodyBuffer);
-    request.end();
-  } catch (err) {
-    res.status(500).send("Error preparando llamada AEAT: " + err.message);
-  }
-});
-
-// =======================
-//   INICIO SERVIDOR
-// =======================
-
-app.listen(PORT, () => {
-  console.log(`Servidor escuchando en el puerto ${PORT}`);
-});
+        res.status(200).send("Código AEAT: " + response.statusCode + "\
