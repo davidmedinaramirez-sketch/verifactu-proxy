@@ -103,9 +103,6 @@ app.post("/verifactu/send", (req, res) => {
     method: "POST",
     pfx: p12Buffer,
     passphrase: P12_PASS,
-    // En PRE podemos relajar la validación de CA
-    // Cuando tengas bien los certificados raíz/intermedios de AEAT,
-    // cambia esto a true y añade 'ca: [...]'
     rejectUnauthorized: false,
     headers: {
       "Content-Type": "text/xml; charset=utf-8",
@@ -175,12 +172,22 @@ app.post("/debug/aeat", (req, res) => {
       },
     };
 
+    // ========== LOGS DE DEPURACIÓN ==========
+    console.log("=== DEPURANDO PETICIÓN AEAT ===");
+    console.log("Cabeceras HTTPS:", options.headers);
+    console.log("Tamaño del body (SOAP):", Buffer.byteLength(xml, "utf8"));
+    console.log("Host destino:", options.hostname);
+    console.log("Ruta destino:", options.path);
+    console.log("===============================");
+
     const r = https.request(options, (resp) => {
       let data = "";
       resp.on("data", (chunk) => (data += chunk));
       resp.on("end", () => {
         const status = resp.statusCode || 0;
         const preview = data.slice(0, 2000);
+        // Log extra: ver cabeceras de la respuesta de AEAT
+        console.log("Cabeceras RES de AEAT:", resp.headers);
         res
           .status(200)
           .send(`Status AEAT: ${status}\n\nPrimeros datos:\n\n${preview}`);
@@ -188,14 +195,14 @@ app.post("/debug/aeat", (req, res) => {
     });
 
     r.on("error", (err) => {
-      console.error("Error en /debug/aeat:", err);
+      console.error("Error en /debug/aeat:", err && err.stack ? err.stack : err);
       res.status(500).send("Error mTLS en /debug/aeat: " + err.message);
     });
 
     r.write(xml);
     r.end();
   } catch (e) {
-    console.error("Error interno en /debug/aeat:", e);
+    console.error("Error interno en /debug/aeat:", e && e.stack ? e.stack : e);
     res.status(500).send("Error interno en /debug/aeat: " + e.message);
   }
 });
