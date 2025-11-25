@@ -11,16 +11,14 @@ app.use(express.text({ type: "*/*" }));
 const API_TOKEN = process.env.API_TOKEN || "DEV_TOKEN";
 
 // Host y ruta del servicio Veri*Factu
-// Por defecto: entorno de PRUEBAS con certificado de sello
 const AEAT_HOST = process.env.AEAT_HOST || "prewww10.aeat.es";
 const AEAT_PATH =
   process.env.AEAT_PATH ||
   "/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP";
 
-// Ruta del certificado P12 cargado como Secret File en Render
+// Ruta del certificado P12, configurable por entorno
 const P12_PATH =
-  process.env.P12_PATH ||
-  "/etc/secrets/MEDINA_RAMIREZ_DAVID___03949255V.p12";
+  process.env.P12_PATH || "/etc/secrets/MEDINA_RAMIREZ_DAVID___03949255V.p12"; // SE USARÁ EL ENV SIEMPRE QUE EXISTA
 
 // Contraseña del P12 (ENV en Render)
 const P12_PASS = process.env.CLIENT_P12_PASS;
@@ -34,8 +32,7 @@ function buildSoapEnvelopeIfNeeded(rawXml) {
     return trimmed;
   }
 
-  // Si no, asumimos que el body es el contenido de <sfLR:RegFactuSistemaFacturacion>
-  // y lo envolvemos en un Envelope SOAP estándar
+  // Si no, envolvemos en Envelope SOAP estándar
   return `
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                   xmlns:sfLR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd">
@@ -56,15 +53,6 @@ app.get("/", (req, res) => {
 // --------------------------------------------------------------
 // RUTA PRINCIPAL PARA BASE44 → ENVÍO VERI*FACTU
 // --------------------------------------------------------------
-//
-// Flujo:
-// 1. Base44 llama a POST /verifactu/send con Authorization: Bearer TOKEN
-// 2. Envía en el body:
-//    a) O bien el nodo completo <sfLR:RegFactuSistemaFacturacion>...</sfLR:...>
-//    b) O bien el SOAP completo (Envelope)
-// 3. Este proxy monta la llamada SOAP al WS Veri*Factu de la AEAT
-// 4. Devuelve a Base44 exactamente la respuesta de la AEAT
-//
 app.post("/verifactu/send", (req, res) => {
   const auth = req.headers["authorization"] || "";
   const expected = `Bearer ${API_TOKEN}`;
@@ -117,7 +105,6 @@ app.post("/verifactu/send", (req, res) => {
     aeatRes.on("data", (chunk) => (data += chunk));
 
     aeatRes.on("end", () => {
-      // Devolvemos a Base44 el código de estado y el XML que responde AEAT
       res
         .status(aeatRes.statusCode || 500)
         .send(data || "");
@@ -172,7 +159,7 @@ app.post("/debug/aeat", (req, res) => {
       },
     };
 
-    // ========== LOGS DE DEPURACIÓN ==========
+    // === LOGS DE DEPURACIÓN ===
     console.log("=== DEPURANDO PETICIÓN AEAT ===");
     console.log("Cabeceras HTTPS:", options.headers);
     console.log("Tamaño del body (SOAP):", Buffer.byteLength(xml, "utf8"));
@@ -186,7 +173,6 @@ app.post("/debug/aeat", (req, res) => {
       resp.on("end", () => {
         const status = resp.statusCode || 0;
         const preview = data.slice(0, 2000);
-        // Log extra: ver cabeceras de la respuesta de AEAT
         console.log("Cabeceras RES de AEAT:", resp.headers);
         res
           .status(200)
