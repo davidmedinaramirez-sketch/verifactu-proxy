@@ -66,12 +66,152 @@ app.get("/test-mtls", (req, res) => {
 });
 
 // =====================================================
-//     ENDPOINT /factura (con API KEY + validación JSON)
+//    UTILIDADES: CONSTRUIR XML Y LLAMAR A LA AEAT
+// =====================================================
+
+// Construye un XML de RegistroAlta a partir del JSON de factura
+function construirXmlAlta(factura) {
+  const obligadoNombre = factura.empresa_razon_social || "OBLIGADO EMISOR";
+  const obligadoNif = factura.empresa_cif || "00000000T";
+
+  const clienteNombre = factura.cliente_nombre || "CLIENTE DESCONOCIDO";
+  const clienteNif = factura.cliente_nif || "99999999R";
+
+  const numeroFactura = factura.numero_factura || "SIN-NUMERO";
+  const fechaEmision = factura.fecha_emision || "2025-01-01";
+  const tipoFactura = factura.tipo_factura || "F1";
+  const descripcionOperacion =
+    factura.observaciones ||
+    factura.categoria_contabilidad ||
+    "Operacion facturada";
+
+  const base =
+    typeof factura.base_neta === "number"
+      ? factura.base_neta
+      : typeof factura.base_bruta === "number"
+      ? factura.base_bruta
+      : typeof factura.base_imponible === "number"
+      ? factura.base_imponible
+      : factura.total || 0;
+
+  const iva =
+    typeof factura.iva_total === "number" ? factura.iva_total : 0;
+
+  const tipoImpositivo = base > 0 ? (iva / base) * 100 : 0;
+
+  const tipoImpositivoStr = tipoImpositivo.toFixed(2);
+  const baseStr = base.toFixed(2);
+  const ivaStr = iva.toFixed(2);
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+  xmlns:sum="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd"
+  xmlns:sum1="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroInformacion.xsd">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <sum:RegFactuSistemaFacturacion>
+      <sum:Cabecera>
+        <sum1:ObligadoEmision>
+          <sum1:NombreRazon>${obligadoNombre}</sum1:NombreRazon>
+          <sum1:NIF>${obligadoNif}</sum1:NIF>
+        </sum1:ObligadoEmision>
+      </sum:Cabecera>
+      <sum:RegistroFactura>
+        <sum1:RegistroAlta>
+          <sum1:IDVersion>1.0</sum1:IDVersion>
+          <sum1:IDFactura>
+            <sum1:IDEmisorFactura>
+              <sum1:NIF>${obligadoNif}</sum1:NIF>
+            </sum1:IDEmisorFactura>
+            <sum1:NumSerieFactura>${numeroFactura}</sum1:NumSerieFactura>
+            <sum1:FechaExpedicionFactura>${fechaEmision}</sum1:FechaExpedicionFactura>
+          </sum1:IDFactura>
+          <sum1:NombreRazonEmisor>${obligadoNombre}</sum1:NombreRazonEmisor>
+          <sum1:TipoFactura>${tipoFactura}</sum1:TipoFactura>
+          <sum1:DescripcionOperacion>${descripcionOperacion}</sum1:DescripcionOperacion>
+          <sum1:Destinatarios>
+            <sum1:IDDestinatario>
+              <sum1:NombreRazon>${clienteNombre}</sum1:NombreRazon>
+              <sum1:NIF>${clienteNif}</sum1:NIF>
+            </sum1:IDDestinatario>
+          </sum1:Destinatarios>
+          <sum1:Desglose>
+            <sum1:DetalleDesglose>
+              <sum1:ClaveRegimen>01</sum1:ClaveRegimen>
+              <sum1:CalificacionOperacion>S1</sum1:CalificacionOperacion>
+              <sum1:TipoImpositivo>${tipoImpositivoStr}</sum1:TipoImpositivo>
+              <sum1:BaseImponible>${baseStr}</sum1:BaseImponible>
+              <sum1:CuotaRepercutida>${ivaStr}</sum1:CuotaRepercutida>
+            </sum1:DetalleDesglose>
+          </sum1:Desglose>
+        </sum1:RegistroAlta>
+      </sum:RegistroFactura>
+    </sum:RegFactuSistemaFacturacion>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+  return xml;
+}
+
+// Llamada a la AEAT (entorno de pruebas) con MTLS
+function enviarXmlAEAT(soapBody) {
+  return new Promise((resolve, reject) => {
+    const agent = crearAgenteMTLS();
+    const bodyBuffer = Buffer.from(soapBody, "utf8");
+
+    const options = {
+      hostname: "prewww1.aeat.es", // ENTORNO DE PRUEBAS
+      port: 443,
+      path: "/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP",
+      method: "POST",
+      agent,
+      headers: {
+        "Content-Type": "text/xml; charset=utf-8",
+        "Content-Length": bodyBuffer.length,
+        "SOAPAction":
+          "https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SistemaFacturacion/altaRegistroFactura",
+      },
+      timeout: 15000,
+    };
+
+    let respuestaAEAT = "";
+
+    const request = https.request(options, (response) => {
+      response.setEncoding("utf8");
+
+      response.on("data", (chunk) => {
+        respuestaAEAT += chunk;
+      });
+
+      response.on("end", () => {
+        resolve({
+          statusCode: response.statusCode,
+          body: respuestaAEAT,
+        });
+      });
+    });
+
+    request.on("error", (err) => {
+      reject(err);
+    });
+
+    request.on("timeout", () => {
+      request.destroy();
+      reject(new Error("Timeout AEAT"));
+    });
+
+    request.write(bodyBuffer);
+    request.end();
+  });
+}
+
+// =====================================================
+//  ENDPOINT /factura (API KEY + validación + envío AEAT)
 // =====================================================
 
 const API_KEY = process.env.FACTURA_API_KEY || null;
 
-app.post("/factura", (req, res) => {
+app.post("/factura", async (req, res) => {
   // 1. Comprobación de que existe clave en el servidor
   if (!API_KEY) {
     return res.status(500).json({
@@ -115,8 +255,7 @@ app.post("/factura", (req, res) => {
     });
   }
 
-  // 4. Log útil de la info clave
-  console.log("📥 Factura recibida:");
+  console.log("📥 Factura recibida (resumen):");
   console.log(
     JSON.stringify(
       {
@@ -132,124 +271,77 @@ app.post("/factura", (req, res) => {
     )
   );
 
-  // 5. Respuesta
-  res.json({
-    ok: true,
-    mensaje: "Factura recibida correctamente en el microservicio",
-    facturaRecibida: factura,
-  });
+  // 4. Construir XML y enviarlo a la AEAT
+  try {
+    const xml = construirXmlAlta(factura);
+    const resultadoAEAT = await enviarXmlAEAT(xml);
+
+    const resumen =
+      resultadoAEAT.body && resultadoAEAT.body.length > 2000
+        ? resultadoAEAT.body.slice(0, 2000) + "\n...[truncado]..."
+        : resultadoAEAT.body || "";
+
+    // 5. Respuesta al ERP (Base44)
+    return res.status(200).json({
+      ok: true,
+      mensaje: "Factura enviada a AEAT (entorno pruebas)",
+      factura_enviada: factura,
+      aeat: {
+        httpStatus: resultadoAEAT.statusCode,
+        rawResponse: resumen,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Error al enviar factura a AEAT:", err.message);
+
+    return res.status(500).json({
+      ok: false,
+      error: "Error al enviar la factura a la AEAT",
+      detalle: err.message,
+    });
+  }
 });
 
 // =====================================================
-//               TEST AEAT (SOAP de prueba)
+//               TEST AEAT MANUAL (debug)
 // =====================================================
 
-app.get("/test-aeat", (req, res) => {
-  let respuestaAEAT = "";
-
-  // ⚠️ CAMBIA TU_NIF_AQUI (2 veces)
-  const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-  xmlns:sum="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd"
-  xmlns:sum1="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroInformacion.xsd">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <sum:RegFactuSistemaFacturacion>
-      <sum:Cabecera>
-        <sum1:ObligadoEmision>
-          <sum1:NombreRazon>EMPRESA PRUEBA VERIFACTU</sum1:NombreRazon>
-          <sum1:NIF>TU_NIF_AQUI</sum1:NIF>
-        </sum1:ObligadoEmision>
-      </sum:Cabecera>
-      <sum:RegistroFactura>
-        <sum1:RegistroAlta>
-          <sum1:IDVersion>1.0</sum1:IDVersion>
-          <sum1:IDFactura>
-            <sum1:IDEmisorFactura>
-              <sum1:NIF>TU_NIF_AQUI</sum1:NIF>
-            </sum1:IDEmisorFactura>
-            <sum1:NumSerieFactura>VF-TEST-0001</sum1:NumSerieFactura>
-            <sum1:FechaExpedicionFactura>2025-01-01</sum1:FechaExpedicionFactura>
-          </sum1:IDFactura>
-          <sum1:NombreRazonEmisor>EMPRESA PRUEBA VERIFACTU</sum1:NombreRazonEmisor>
-          <sum1:TipoFactura>F1</sum1:TipoFactura>
-          <sum1:DescripcionOperacion>Prueba alta registro VeriFactu</sum1:DescripcionOperacion>
-          <sum1:Destinatarios>
-            <sum1:IDDestinatario>
-              <sum1:NombreRazon>CLIENTE PRUEBA</sum1:NombreRazon>
-              <sum1:NIF>99999999R</sum1:NIF>
-            </sum1:IDDestinatario>
-          </sum1:Destinatarios>
-          <sum1:Desglose>
-            <sum1:DetalleDesglose>
-              <sum1:ClaveRegimen>01</sum1:ClaveRegimen>
-              <sum1:CalificacionOperacion>S1</sum1:CalificacionOperacion>
-              <sum1:TipoImpositivo>21.00</sum1:TipoImpositivo>
-              <sum1:BaseImponible>100.00</sum1:BaseImponible>
-              <sum1:CuotaRepercutida>21.00</sum1:CuotaRepercutida>
-            </sum1:DetalleDesglose>
-          </sum1:Desglose>
-        </sum1:RegistroAlta>
-      </sum:RegistroFactura>
-    </sum:RegFactuSistemaFacturacion>
-  </soapenv:Body>
-</soapenv:Envelope>`;
-
+app.get("/test-aeat", async (req, res) => {
   try {
-    const agent = crearAgenteMTLS();
-    const bodyBuffer = Buffer.from(soapBody, "utf8");
-
-    const options = {
-      hostname: "prewww1.aeat.es",
-      port: 443,
-      path: "/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP",
-      method: "POST",
-      agent,
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        "Content-Length": bodyBuffer.length,
-        "SOAPAction":
-          "https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SistemaFacturacion/altaRegistroFactura",
-      },
-      timeout: 15000,
+    const facturaFake = {
+      numero_factura: "VF-TEST-0001",
+      tipo_factura: "F1",
+      fecha_emision: "2025-01-01",
+      empresa_razon_social: "EMPRESA PRUEBA VERIFACTU",
+      empresa_cif: "TU_NIF_AQUI", // ⚠️ cambiar por el NIF del certificado adecuado
+      cliente_nombre: "CLIENTE PRUEBA",
+      cliente_nif: "99999999R",
+      base_neta: 100,
+      iva_total: 21,
+      total: 121,
+      observaciones: "Prueba manual /test-aeat",
     };
 
-    const request = https.request(options, (response) => {
-      response.setEncoding("utf8");
+    const xml = construirXmlAlta(facturaFake);
+    const resultado = await enviarXmlAEAT(xml);
 
-      response.on("data", (chunk) => {
-        respuestaAEAT += chunk;
-      });
+    const resumen =
+      resultado.body && resultado.body.length > 2000
+        ? resultado.body.slice(0, 2000) + "\n...[truncado]..."
+        : resultado.body || "";
 
-      response.on("end", () => {
-        const resumen =
-          respuestaAEAT.length > 2000
-            ? respuestaAEAT.slice(0, 2000) + "\n...[truncado]..."
-            : respuestaAEAT;
-
-        const texto =
-          "Código AEAT: " +
-          response.statusCode +
+    res
+      .status(200)
+      .send(
+        "Código AEAT: " +
+          resultado.statusCode +
+          "\n\nXML enviado:\n" +
+          xml +
           "\n\nRespuesta:\n" +
-          resumen;
-
-        res.status(200).send(texto);
-      });
-    });
-
-    request.on("error", (err) => {
-      res.status(500).send("Error AEAT: " + err.message);
-    });
-
-    request.on("timeout", () => {
-      request.destroy();
-      res.status(504).send("Timeout AEAT");
-    });
-
-    request.write(bodyBuffer);
-    request.end();
+          resumen
+      );
   } catch (err) {
-    res.status(500).send("Error preparando llamada AEAT: " + err.message);
+    res.status(500).send("Error en /test-aeat: " + err.message);
   }
 });
 
