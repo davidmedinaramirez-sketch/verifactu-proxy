@@ -313,7 +313,7 @@ app.get("/test-aeat", async (req, res) => {
       tipo_factura: "F1",
       fecha_emision: "2025-01-01",
       empresa_razon_social: "EMPRESA PRUEBA VERIFACTU",
-      empresa_cif: "TU_NIF_AQUI", // ⚠️ cambiar por el NIF del certificado adecuado
+      empresa_cif: "B45440955", // ⚠️ cambiar por el NIF del certificado adecuado
       cliente_nombre: "CLIENTE PRUEBA",
       cliente_nif: "99999999R",
       base_neta: 100,
