@@ -123,6 +123,9 @@ function construirXmlAlta(factura) {
             <sum1:IDEmisorFactura>
               <sum1:NIF>${obligadoNif}</sum1:NIF>
             </sum1:IDEmisorFactura>
+            <sum1:IDReceptorFactura>
+              <sum1:NIF>${clienteNif}</sum1:NIF>
+            </sum1:IDReceptorFactura>
             <sum1:NumSerieFactura>${numeroFactura}</sum1:NumSerieFactura>
             <sum1:FechaExpedicionFactura>${fechaEmision}</sum1:FechaExpedicionFactura>
           </sum1:IDFactura>
@@ -313,7 +316,7 @@ app.get("/test-aeat", async (req, res) => {
       tipo_factura: "F1",
       fecha_emision: "2025-01-01",
       empresa_razon_social: "EMPRESA PRUEBA VERIFACTU",
-      empresa_cif: "B45440955", // ⚠️ cambiar por el NIF del certificado adecuado
+      empresa_cif: "B45440955", // ⚠️ pon aquí el NIF del certificado si quieres probarlo con tus datos
       cliente_nombre: "CLIENTE PRUEBA",
       cliente_nif: "99999999R",
       base_neta: 100,
