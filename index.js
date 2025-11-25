@@ -4,35 +4,23 @@ const fs = require("fs");
 
 const app = express();
 
-// Para aceptar texto (XML) en el body
 app.use(express.text({ type: "*/*" }));
 
-// === Variables de entorno básicas ===
 const API_TOKEN = process.env.API_TOKEN || "DEV_TOKEN";
-
-// Host y ruta del servicio Veri*Factu
 const AEAT_HOST = process.env.AEAT_HOST || "prewww10.aeat.es";
 const AEAT_PATH =
   process.env.AEAT_PATH ||
   "/wlpl/TIKE-CONT/ws/SistemaFacturacion/VerifactuSOAP";
-
-// Ruta del certificado P12, configurable por entorno
 const P12_PATH =
-  process.env.P12_PATH || "/etc/secrets/MEDINA_RAMIREZ_DAVID___03949255V.p12"; // SE USARÁ EL ENV SIEMPRE QUE EXISTA
-
-// Contraseña del P12 (ENV en Render)
+  process.env.P12_PATH || "/etc/secrets/MEDINA_RAMIREZ_DAVID___03949255V.p12";
 const P12_PASS = process.env.CLIENT_P12_PASS;
 
-// === Helper: construir sobre SOAP si hace falta ===
+// Helper para SOAP
 function buildSoapEnvelopeIfNeeded(rawXml) {
   const trimmed = (rawXml || "").trim();
-
-  // Si ya es un Envelope SOAP, lo mandamos tal cual
   if (trimmed.includes("<soapenv:Envelope") || trimmed.includes("<soap:Envelope")) {
     return trimmed;
   }
-
-  // Si no, envolvemos en Envelope SOAP estándar
   return `
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                   xmlns:sfLR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd">
@@ -43,16 +31,23 @@ function buildSoapEnvelopeIfNeeded(rawXml) {
 </soapenv:Envelope>`.trim();
 }
 
-// --------------------------------------------------------------
-// RUTA SIMPLE PARA PROBAR QUE EL SERVIDOR ESTÁ VIVO
-// --------------------------------------------------------------
+// Endpoint para verificación viva
 app.get("/", (req, res) => {
   res.send("Hola, Render está funcionando ✅");
 });
 
-// --------------------------------------------------------------
-// RUTA PRINCIPAL PARA BASE44 → ENVÍO VERI*FACTU
-// --------------------------------------------------------------
+// Endpoint de debugging: descarga el p12 tal cual Render lo tiene
+app.get("/debug/download-p12", (req, res) => {
+  try {
+    const data = fs.readFileSync(P12_PATH);
+    res.set('Content-Type', 'application/x-pkcs12');
+    res.send(data);
+  } catch (err) {
+    res.status(500).send("Error: " + err);
+  }
+});
+
+// Ruta principal (inicial)
 app.post("/verifactu/send", (req, res) => {
   const auth = req.headers["authorization"] || "";
   const expected = `Bearer ${API_TOKEN}`;
@@ -60,16 +55,17 @@ app.post("/verifactu/send", (req, res) => {
     return res.status(401).send("Unauthorized");
   }
 
-  // 1) Body recibido de Base44
   const rawXml = req.body || "";
-
-  // 2) Construir Envelope SOAP si hace falta
   const soapEnvelope = buildSoapEnvelopeIfNeeded(rawXml);
 
-  // 3) Leer certificado de sello (P12) desde Secret File
   let p12Buffer;
   try {
+    // ------------ LOGS DE DIAGNÓSTICO -----------
     p12Buffer = fs.readFileSync(P12_PATH);
+    console.log("P12 PATH:", P12_PATH);
+    console.log("P12 Buffer size:", p12Buffer.length);
+    console.log("P12 First 16 bytes HEX:", p12Buffer.slice(0,16).toString("hex"));
+    // ----------------------------------------------
   } catch (e) {
     console.error("No se ha podido leer el P12:", e);
     return res
@@ -83,7 +79,6 @@ app.post("/verifactu/send", (req, res) => {
       .send("CLIENT_P12_PASS no está configurada en Environment Variables.");
   }
 
-  // 4) Preparar opciones de conexión HTTPS con mTLS
   const options = {
     hostname: AEAT_HOST,
     port: 443,
@@ -118,7 +113,6 @@ app.post("/verifactu/send", (req, res) => {
       .send("Error comunicando con AEAT: " + (err.message || "desconocido"));
   });
 
-  // 5) Enviar el SOAP a la AEAT
   aeatReq.write(soapEnvelope);
   aeatReq.end();
 });
@@ -134,7 +128,12 @@ app.post("/debug/aeat", (req, res) => {
   }
 
   try {
+    // ------------ LOGS DE DIAGNÓSTICO -----------
     const p12Buffer = fs.readFileSync(P12_PATH);
+    console.log("P12 PATH:", P12_PATH);
+    console.log("P12 Buffer size:", p12Buffer.length);
+    console.log("P12 First 16 bytes HEX:", p12Buffer.slice(0,16).toString("hex"));
+    // ----------------------------------------------
 
     const dummyRF = `
 <sfLR:RegFactuSistemaFacturacion xmlns:sfLR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd">
@@ -159,7 +158,6 @@ app.post("/debug/aeat", (req, res) => {
       },
     };
 
-    // === LOGS DE DEPURACIÓN ===
     console.log("=== DEPURANDO PETICIÓN AEAT ===");
     console.log("Cabeceras HTTPS:", options.headers);
     console.log("Tamaño del body (SOAP):", Buffer.byteLength(xml, "utf8"));
@@ -192,8 +190,6 @@ app.post("/debug/aeat", (req, res) => {
     res.status(500).send("Error interno en /debug/aeat: " + e.message);
   }
 });
-
-// --------------------------------------------------------------
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
