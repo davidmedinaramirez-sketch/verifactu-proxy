@@ -71,7 +71,6 @@ app.get("/test-mtls", (req, res) => {
 
 function formatearFechaDDMMYYYY(fechaISO) {
   if (!fechaISO) return "";
-  // Esperamos "YYYY-MM-DD"
   const partes = fechaISO.split("-");
   if (partes.length !== 3) return fechaISO;
   const [yyyy, mm, dd] = partes;
@@ -98,7 +97,7 @@ function construirXmlAlta(factura) {
   const fechaEmision = formatearFechaDDMMYYYY(fechaEmisionISO);
 
   const tipoFactura = factura.tipo_factura || "F1"; // F1, F2, F3, R1-R5
-  const tipoRectificativa = factura.tipo_rectificativa || null; // "S" o "I" si aplica
+  const tipoRectificativa = factura.tipo_rectificativa || null; // "S" o "I"
 
   const descripcionOperacion =
     factura.descripcion_operacion ||
@@ -119,8 +118,13 @@ function construirXmlAlta(factura) {
   const sinIdentDest = factura.sin_identificacion_destinatario ? "S" : "N";
   const macrodato = factura.es_macrodato ? "S" : "N";
 
-  // EmitidaPorTerceroODestinatario: "N", "T", "D"
-  const emitidaPorTercero = factura.emitida_por_tercero || "N";
+  // EmitidaPorTerceroODestinatario: solo T o D si aplica, si no SE OMITE
+  const emitidaPorTerceroRaw = factura.emitida_por_tercero || "N";
+  const debeInformarEmitidaPorTercero =
+    emitidaPorTerceroRaw === "T" || emitidaPorTerceroRaw === "D";
+  const emitidaPorTercero = debeInformarEmitidaPorTercero
+    ? emitidaPorTerceroRaw
+    : null;
 
   const tieneCupon = factura.tiene_cupon ? "S" : "N";
 
@@ -135,7 +139,10 @@ function construirXmlAlta(factura) {
   const cuotaTotal = ivaTotal + recargoEqTotal;
 
   let desgloseXML = "";
-  if (Array.isArray(factura.desglose_fiscal) && factura.desglose_fiscal.length > 0) {
+  if (
+    Array.isArray(factura.desglose_fiscal) &&
+    factura.desglose_fiscal.length > 0
+  ) {
     factura.desglose_fiscal.forEach((d) => {
       const impuesto = d.impuesto || "01"; // 01=IVA
       const claveRegimen = d.clave_regimen || "01";
@@ -192,11 +199,8 @@ function construirXmlAlta(factura) {
             </sum1:DetalleDesglose>`;
     });
   } else {
-    // Desglose mínimo si solo tenemos base_neta / iva_total
     const base =
-      typeof factura.base_neta === "number"
-        ? factura.base_neta
-        : 0;
+      typeof factura.base_neta === "number" ? factura.base_neta : 0;
     const tipoImp = base > 0 ? (ivaTotal / base) * 100 : 0;
     desgloseXML = `
             <sum1:DetalleDesglose>
@@ -217,8 +221,11 @@ function construirXmlAlta(factura) {
 
   // ---- Destinatarios: NIF o IDOtro ----
   let destinatarioXML = "";
-  if (!clienteExtranjero && clienteNif && !factura.sin_identificacion_destinatario) {
-    // Cliente nacional con NIF
+  if (
+    !clienteExtranjero &&
+    clienteNif &&
+    !factura.sin_identificacion_destinatario
+  ) {
     destinatarioXML = `
         <sum1:Destinatarios>
           <sum1:IDDestinatario>
@@ -227,7 +234,6 @@ function construirXmlAlta(factura) {
           </sum1:IDDestinatario>
         </sum1:Destinatarios>`;
   } else {
-    // Extranjero o factura sin identificación de destinatario → IDOtro opcional
     destinatarioXML = `
         <sum1:Destinatarios>
           <sum1:IDDestinatario>
@@ -283,7 +289,7 @@ function construirXmlAlta(factura) {
   }
 
   // ---- Huella actual / fecha generación ----
-  const tipoHuella = "01"; // p.ej. 01 = SHA-256
+  const tipoHuella = "01"; // SHA-256
   const huella = factura.verifactu_hash || "";
   const fechaHoraGen =
     factura.verifactu_firma_fecha || new Date().toISOString();
@@ -294,14 +300,14 @@ function construirXmlAlta(factura) {
       )}</sum1:FechaOperacion>`
     : "";
 
-  // ---- SistemaInformatico (mínimo obligatorio) ----
-  const sistemaNombreRazon = obligadoNombre;          // titular del sistema
-  const sistemaNif = obligadoNif;                     // NIF del titular
-  const nombreSistema = "BASE44 ERP GANADERO";        // nombre comercial
-  const idSistema = "01";                             // puedes ajustar
-  const versionSistema = "1.0";                       // versión
-  const numeroInstalacion = "BASE44-ERP-001";         // identificador único
-  const tipoUsoSoloVerifactu = "S";                   // sólo VeriFactu
+  // ---- SistemaInformatico ----
+  const sistemaNombreRazon = obligadoNombre;
+  const sistemaNif = obligadoNif;
+  const nombreSistema = "BASE44 ERP GANADERO";
+  const idSistema = "01";
+  const versionSistema = "1.0";
+  const numeroInstalacion = "BASE44-ERP-001";
+  const tipoUsoSoloVerifactu = "S";
   const tipoUsoMultiOT = "N";
   const indicadorMultiplesOT = "N";
 
@@ -318,7 +324,25 @@ function construirXmlAlta(factura) {
             <sum1:IndicadorMultiplesOT>${indicadorMultiplesOT}</sum1:IndicadorMultiplesOT>
           </sum1:SistemaInformatico>`;
 
-  // ⚠️ IMPORTANTE: orden según diseño AEAT
+  // ---- Bloque opcional EmitidaPorTercero + Tercero ----
+  let emitidaPorTerceroXML = "";
+  if (emitidaPorTercero) {
+    emitidaPorTerceroXML = `
+          <sum1:EmitidaPorTerceroODestinatario>${emitidaPorTercero}</sum1:EmitidaPorTerceroODestinatario>
+          <sum1:Tercero>
+            ${
+              factura.tercero_nombre
+                ? `<sum1:NombreRazon>${factura.tercero_nombre}</sum1:NombreRazon>`
+                : ""
+            }
+            ${
+              factura.tercero_nif
+                ? `<sum1:NIF>${factura.tercero_nif}</sum1:NIF>`
+                : ""
+            }
+          </sum1:Tercero>`;
+  }
+
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
   xmlns:sum="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd"
@@ -355,24 +379,7 @@ function construirXmlAlta(factura) {
           <sum1:FacturaSimplificadaArt7273>${facturaSimplificada}</sum1:FacturaSimplificadaArt7273>
           <sum1:FacturaSinIdentifDestinatarioArt61d>${sinIdentDest}</sum1:FacturaSinIdentifDestinatarioArt61d>
           <sum1:Macrodato>${macrodato}</sum1:Macrodato>
-          <sum1:EmitidaPorTerceroODestinatario>${emitidaPorTercero}</sum1:EmitidaPorTerceroODestinatario>
-          ${
-            emitidaPorTercero !== "N"
-              ? `
-          <sum1:Tercero>
-            ${
-              factura.tercero_nombre
-                ? `<sum1:NombreRazon>${factura.tercero_nombre}</sum1:NombreRazon>`
-                : ""
-            }
-            ${
-              factura.tercero_nif
-                ? `<sum1:NIF>${factura.tercero_nif}</sum1:NIF>`
-                : ""
-            }
-          </sum1:Tercero>`
-              : ""
-          }
+          ${emitidaPorTerceroXML}
           ${destinatarioXML}
           <sum1:Cupon>${tieneCupon}</sum1:Cupon>
           <sum1:Desglose>
@@ -546,7 +553,7 @@ app.get("/test-aeat", async (req, res) => {
       fecha_emision: "2025-01-01",
       descripcion_operacion: "Prueba manual /test-aeat",
       empresa_razon_social: "EMPRESA PRUEBA VERIFACTU",
-      empresa_cif: "B45440955", // NIF del certificado / obligado
+      empresa_cif: "B45440955",
       cliente_nombre: "CLIENTE PRUEBA",
       cliente_nif: "99999999R",
       cliente_es_extranjero: false,
@@ -557,6 +564,7 @@ app.get("/test-aeat", async (req, res) => {
       verifactu_hash: "FAKEHASH1234567890",
       verifactu_es_primer_registro: true,
       verifactu_firma_fecha: "2025-01-01T12:00:00+01:00",
+      emitida_por_tercero: "N", // NO se debe enviar el campo (se omitirá)
     };
 
     const xml = construirXmlAlta(facturaFake);
