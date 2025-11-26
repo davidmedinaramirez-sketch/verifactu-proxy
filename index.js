@@ -112,9 +112,10 @@ function construirXmlAlta(factura) {
   const subsanacion = factura.verifactu_subsanacion ? "S" : "N";
   const rechazoPrevio = factura.verifactu_rechazo_previo ? "S" : "N";
 
-  const facturaSimplificada = tipoFactura === "F2" || tipoFactura === "F3" || factura.es_simplificada
-    ? "S"
-    : "N";
+  const facturaSimplificada =
+    tipoFactura === "F2" || tipoFactura === "F3" || factura.es_simplificada
+      ? "S"
+      : "N";
   const sinIdentDest = factura.sin_identificacion_destinatario ? "S" : "N";
   const macrodato = factura.es_macrodato ? "S" : "N";
 
@@ -132,10 +133,6 @@ function construirXmlAlta(factura) {
       ? factura.recargo_equivalencia_total
       : 0;
   const cuotaTotal = ivaTotal + recargoEqTotal;
-
-  // Si tenemos conceptos, Base44 ya habrá calculado base_neta, iva_total, etc.
-  const desglose = []; // podemos generar desglose_fiscal simple a partir de base_neta/iva_total
-  // Nota: si en el futuro Base44 te manda un "desglose_fiscal", aquí se podría usar.
 
   let desgloseXML = "";
   if (Array.isArray(factura.desglose_fiscal) && factura.desglose_fiscal.length > 0) {
@@ -164,9 +161,10 @@ function construirXmlAlta(factura) {
               <sum1:Impuesto>${impuesto}</sum1:Impuesto>
               <sum1:ClaveRegimen>${claveRegimen}</sum1:ClaveRegimen>
               <sum1:CalificacionOperacion>${califOperacion}</sum1:CalificacionOperacion>
-              ${operacionExenta
-                ? `<sum1:OperacionExenta>${operacionExenta}</sum1:OperacionExenta>`
-                : ""
+              ${
+                operacionExenta
+                  ? `<sum1:OperacionExenta>${operacionExenta}</sum1:OperacionExenta>`
+                  : ""
               }
               <sum1:TipoImpositivo>${tipoImpositivo.toFixed(
                 2
@@ -177,17 +175,19 @@ function construirXmlAlta(factura) {
               <sum1:CuotaRepercutida>${cuotaRep.toFixed(
                 2
               )}</sum1:CuotaRepercutida>
-              ${tipoReqEq
-                ? `<sum1:TipoRecargoEquivalencia>${tipoReqEq.toFixed(
-                    2
-                  )}</sum1:TipoRecargoEquivalencia>`
-                : ""
+              ${
+                tipoReqEq
+                  ? `<sum1:TipoRecargoEquivalencia>${tipoReqEq.toFixed(
+                      2
+                    )}</sum1:TipoRecargoEquivalencia>`
+                  : ""
               }
-              ${cuotaReqEq
-                ? `<sum1:CuotaRecargoEquivalencia>${cuotaReqEq.toFixed(
-                    2
-                  )}</sum1:CuotaRecargoEquivalencia>`
-                : ""
+              ${
+                cuotaReqEq
+                  ? `<sum1:CuotaRecargoEquivalencia>${cuotaReqEq.toFixed(
+                      2
+                    )}</sum1:CuotaRecargoEquivalencia>`
+                  : ""
               }
             </sum1:DetalleDesglose>`;
     });
@@ -233,17 +233,20 @@ function construirXmlAlta(factura) {
           <sum1:IDDestinatario>
             <sum1:NombreRazon>${clienteNombre}</sum1:NombreRazon>
             <sum1:IDOtro>
-              ${clienteCodigoPais
-                ? `<sum1:CodigoPais>${clienteCodigoPais}</sum1:CodigoPais>`
-                : ""
+              ${
+                clienteCodigoPais
+                  ? `<sum1:CodigoPais>${clienteCodigoPais}</sum1:CodigoPais>`
+                  : ""
               }
-              ${clienteIdType
-                ? `<sum1:IDType>${clienteIdType}</sum1:IDType>`
-                : ""
+              ${
+                clienteIdType
+                  ? `<sum1:IDType>${clienteIdType}</sum1:IDType>`
+                  : ""
               }
-              ${clienteIdExtranjero
-                ? `<sum1:ID>${clienteIdExtranjero}</sum1:ID>`
-                : ""
+              ${
+                clienteIdExtranjero
+                  ? `<sum1:ID>${clienteIdExtranjero}</sum1:ID>`
+                  : ""
               }
             </sum1:IDOtro>
           </sum1:IDDestinatario>
@@ -291,6 +294,7 @@ function construirXmlAlta(factura) {
       )}</sum1:FechaOperacion>`
     : "";
 
+  // ⚠️ IMPORTANTE: orden según diseño AEAT
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
   xmlns:sum="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroLR.xsd"
@@ -312,14 +316,15 @@ function construirXmlAlta(factura) {
             <sum1:NumSerieFactura>${numeroFactura}</sum1:NumSerieFactura>
             <sum1:FechaExpedicionFactura>${fechaEmision}</sum1:FechaExpedicionFactura>
           </sum1:IDFactura>
-          <sum1:NombreRazonEmisor>${obligadoNombre}</sum1:NombreRazonEmisor>
           <sum1:RefExterna>${refExterna}</sum1:RefExterna>
+          <sum1:NombreRazonEmisor>${obligadoNombre}</sum1:NombreRazonEmisor>
           <sum1:Subsanacion>${subsanacion}</sum1:Subsanacion>
           <sum1:RechazoPrevio>${rechazoPrevio}</sum1:RechazoPrevio>
           <sum1:TipoFactura>${tipoFactura}</sum1:TipoFactura>
-          ${tipoRectificativa
-            ? `<sum1:TipoRectificativa>${tipoRectificativa}</sum1:TipoRectificativa>`
-            : ""
+          ${
+            tipoRectificativa
+              ? `<sum1:TipoRectificativa>${tipoRectificativa}</sum1:TipoRectificativa>`
+              : ""
           }
           ${fechaOperacionXML}
           <sum1:DescripcionOperacion>${descripcionOperacion}</sum1:DescripcionOperacion>
@@ -331,13 +336,15 @@ function construirXmlAlta(factura) {
             emitidaPorTercero !== "N"
               ? `
           <sum1:Tercero>
-            ${factura.tercero_nombre
-              ? `<sum1:NombreRazon>${factura.tercero_nombre}</sum1:NombreRazon>`
-              : ""
+            ${
+              factura.tercero_nombre
+                ? `<sum1:NombreRazon>${factura.tercero_nombre}</sum1:NombreRazon>`
+                : ""
             }
-            ${factura.tercero_nif
-              ? `<sum1:NIF>${factura.tercero_nif}</sum1:NIF>`
-              : ""
+            ${
+              factura.tercero_nif
+                ? `<sum1:NIF>${factura.tercero_nif}</sum1:NIF>`
+                : ""
             }
           </sum1:Tercero>`
               : ""
@@ -533,7 +540,7 @@ app.get("/test-aeat", async (req, res) => {
       total: 121,
       verifactu_hash: "FAKEHASH1234567890",
       verifactu_es_primer_registro: true,
-      verifactu_firma_fecha: "2025-01-01T12:00:00+01:00"
+      verifactu_firma_fecha: "2025-01-01T12:00:00+01:00",
     };
 
     const xml = construirXmlAlta(facturaFake);
