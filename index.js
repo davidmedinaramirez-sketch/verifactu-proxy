@@ -118,7 +118,7 @@ function construirXmlAlta(factura) {
   const sinIdentDest = factura.sin_identificacion_destinatario ? "S" : "N";
   const macrodato = factura.es_macrodato ? "S" : "N";
 
-  // EmitidaPorTerceroODestinatario: solo T o D si aplica, si no SE OMITE
+  // EmitidaPorTerceroODestinatario: solo T o D si aplica, si no se omite
   const emitidaPorTerceroRaw = factura.emitida_por_tercero || "N";
   const debeInformarEmitidaPorTercero =
     emitidaPorTerceroRaw === "T" || emitidaPorTerceroRaw === "D";
@@ -454,12 +454,13 @@ function enviarXmlAEAT(soapBody) {
 }
 
 // =====================================================
-//  ENDPOINT /factura (API KEY + validación + envío AEAT)
+//  ENDPOINT /factura (API KEY + mapeo Base44 + AEAT)
 // =====================================================
 
 const API_KEY = process.env.FACTURA_API_KEY || null;
 
 app.post("/factura", async (req, res) => {
+  // 1) Comprobamos API KEY
   if (!API_KEY) {
     return res.status(500).json({
       ok: false,
@@ -468,7 +469,6 @@ app.post("/factura", async (req, res) => {
   }
 
   const headerKey = req.headers["x-api-key"];
-
   if (headerKey !== API_KEY) {
     return res.status(401).json({
       ok: false,
@@ -476,19 +476,73 @@ app.post("/factura", async (req, res) => {
     });
   }
 
-  const factura = req.body;
+  // 2) Payload bruto que envía Base44
+  const p = req.body;
 
+  console.log("### PAYLOAD RECIBIDO DE BASE44 ###");
+  console.log(JSON.stringify(p, null, 2));
+
+  // 3) Adaptamos el payload "simple" de Base44
+  //    al objeto "factura" que usa construirXmlAlta()
+  const factura = {
+    // Identificación factura
+    numero_factura: p.numero_factura || p.factura_numero,
+    fecha_emision: p.fecha_emision,
+
+    // Emisor
+    empresa_cif: p.empresa_cif || p.nif_emisor,
+    empresa_razon_social: p.empresa_razon_social || p.nombre_emisor,
+
+    // Destinatario
+    cliente_nombre: p.cliente_nombre,
+    cliente_nif: p.cliente_nif,
+    cliente_es_extranjero: false, // de momento asumimos cliente nacional
+
+    // Importes
+    total:
+      typeof p.total === "string" ? parseFloat(p.total) : p.total,
+    iva_total:
+      typeof p.iva_total === "string"
+        ? parseFloat(p.iva_total)
+        : p.iva_total,
+    base_neta:
+      typeof p.total === "number" && typeof p.iva_total === "number"
+        ? p.total - p.iva_total
+        : undefined,
+
+    // Campos VeriFactu
+    verifactu_hash: p.verifactu_hash || p.hash_verifactu,
+    verifactu_hash_anterior:
+      p.verifactu_hash_anterior || p.hash_anterior || "",
+    verifactu_es_primer_registro: !(p.hash_anterior || p.verifactu_hash_anterior),
+    verifactu_firma_fecha: new Date().toISOString(),
+
+    // Defaults razonables
+    tipo_factura: p.tipo_factura || "F1",
+    descripcion_operacion:
+      p.descripcion_operacion || "Operacion facturada desde Base44",
+  };
+
+  // 4) Validación sobre el objeto "factura" ya adaptado
   const errores = [];
   if (!factura.numero_factura)
     errores.push("numero_factura es obligatorio");
   if (!factura.fecha_emision)
     errores.push("fecha_emision es obligatoria");
-  if (!factura.cliente_nombre)
-    errores.push("cliente_nombre es obligatorio");
-  if (typeof factura.total !== "number")
+
+  // cliente_nombre solo obligatorio si NO es factura sin identificación
+  if (!p.sin_identificacion_destinatario && !factura.cliente_nombre) {
+    errores.push(
+      "cliente_nombre es obligatorio salvo facturas sin identificación de destinatario"
+    );
+  }
+
+  if (typeof factura.total !== "number" || isNaN(factura.total)) {
     errores.push("total debe ser numérico");
+  }
 
   if (errores.length > 0) {
+    console.log("❌ Factura inválida:", errores);
     return res.status(400).json({
       ok: false,
       error: "Factura inválida",
@@ -496,7 +550,7 @@ app.post("/factura", async (req, res) => {
     });
   }
 
-  console.log("📥 Factura recibida (resumen):");
+  console.log("📥 Factura adaptada (resumen):");
   console.log(
     JSON.stringify(
       {
@@ -506,12 +560,14 @@ app.post("/factura", async (req, res) => {
         cliente_nombre: factura.cliente_nombre,
         cliente_nif: factura.cliente_nif,
         total: factura.total,
+        iva_total: factura.iva_total,
       },
       null,
       2
     )
   );
 
+  // 5) Envío a AEAT
   try {
     const xml = construirXmlAlta(factura);
     const resultadoAEAT = await enviarXmlAEAT(xml);
@@ -564,7 +620,7 @@ app.get("/test-aeat", async (req, res) => {
       verifactu_hash: "FAKEHASH1234567890",
       verifactu_es_primer_registro: true,
       verifactu_firma_fecha: "2025-01-01T12:00:00+01:00",
-      emitida_por_tercero: "N", // NO se debe enviar el campo (se omitirá)
+      emitida_por_tercero: "N",
     };
 
     const xml = construirXmlAlta(facturaFake);
