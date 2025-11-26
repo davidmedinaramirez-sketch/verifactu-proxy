@@ -78,7 +78,7 @@ function formatearFechaDDMMYYYY(fechaISO) {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-// Construye un XML de RegistroAlta a partir del JSON de factura (v2)
+// Construye un XML de RegistroAlta a partir del JSON de factura
 function construirXmlAlta(factura) {
   // ---- Emisor / obligado ----
   const obligadoNombre = factura.empresa_razon_social || "OBLIGADO EMISOR";
@@ -294,6 +294,30 @@ function construirXmlAlta(factura) {
       )}</sum1:FechaOperacion>`
     : "";
 
+  // ---- SistemaInformatico (mínimo obligatorio) ----
+  const sistemaNombreRazon = obligadoNombre;          // titular del sistema
+  const sistemaNif = obligadoNif;                     // NIF del titular
+  const nombreSistema = "BASE44 ERP GANADERO";        // nombre comercial
+  const idSistema = "01";                             // puedes ajustar
+  const versionSistema = "1.0";                       // versión
+  const numeroInstalacion = "BASE44-ERP-001";         // identificador único
+  const tipoUsoSoloVerifactu = "S";                   // sólo VeriFactu
+  const tipoUsoMultiOT = "N";
+  const indicadorMultiplesOT = "N";
+
+  const sistemaInformaticoXML = `
+          <sum1:SistemaInformatico>
+            <sum1:NombreRazon>${sistemaNombreRazon}</sum1:NombreRazon>
+            <sum1:NIF>${sistemaNif}</sum1:NIF>
+            <sum1:NombreSistemaInformatico>${nombreSistema}</sum1:NombreSistemaInformatico>
+            <sum1:IdSistemaInformatico>${idSistema}</sum1:IdSistemaInformatico>
+            <sum1:Version>${versionSistema}</sum1:Version>
+            <sum1:NumeroInstalacion>${numeroInstalacion}</sum1:NumeroInstalacion>
+            <sum1:TipoUsoPosibleSoloVerifactu>${tipoUsoSoloVerifactu}</sum1:TipoUsoPosibleSoloVerifactu>
+            <sum1:TipoUsoPosibleMultiOT>${tipoUsoMultiOT}</sum1:TipoUsoPosibleMultiOT>
+            <sum1:IndicadorMultiplesOT>${indicadorMultiplesOT}</sum1:IndicadorMultiplesOT>
+          </sum1:SistemaInformatico>`;
+
   // ⚠️ IMPORTANTE: orden según diseño AEAT
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -357,6 +381,7 @@ function construirXmlAlta(factura) {
           <sum1:CuotaTotal>${cuotaTotal.toFixed(2)}</sum1:CuotaTotal>
           <sum1:ImporteTotal>${total.toFixed(2)}</sum1:ImporteTotal>
           ${encadenamientoXML}
+          ${sistemaInformaticoXML}
           <sum1:FechaHoraHusoGenRegistro>${fechaHoraGen}</sum1:FechaHoraHusoGenRegistro>
           <sum1:TipoHuella>${tipoHuella}</sum1:TipoHuella>
           <sum1:Huella>${huella}</sum1:Huella>
@@ -428,7 +453,6 @@ function enviarXmlAEAT(soapBody) {
 const API_KEY = process.env.FACTURA_API_KEY || null;
 
 app.post("/factura", async (req, res) => {
-  // 1. Comprobación de que existe clave en el servidor
   if (!API_KEY) {
     return res.status(500).json({
       ok: false,
@@ -436,7 +460,6 @@ app.post("/factura", async (req, res) => {
     });
   }
 
-  // 2. Comprobar cabecera enviada por Base44
   const headerKey = req.headers["x-api-key"];
 
   if (headerKey !== API_KEY) {
@@ -448,18 +471,13 @@ app.post("/factura", async (req, res) => {
 
   const factura = req.body;
 
-  // 3. Validación mínima según tu schema oficial
   const errores = [];
-
   if (!factura.numero_factura)
     errores.push("numero_factura es obligatorio");
-
   if (!factura.fecha_emision)
     errores.push("fecha_emision es obligatoria");
-
   if (!factura.cliente_nombre)
     errores.push("cliente_nombre es obligatorio");
-
   if (typeof factura.total !== "number")
     errores.push("total debe ser numérico");
 
@@ -487,7 +505,6 @@ app.post("/factura", async (req, res) => {
     )
   );
 
-  // 4. Construir XML y enviarlo a la AEAT
   try {
     const xml = construirXmlAlta(factura);
     const resultadoAEAT = await enviarXmlAEAT(xml);
@@ -497,7 +514,6 @@ app.post("/factura", async (req, res) => {
         ? resultadoAEAT.body.slice(0, 2000) + "\n...[truncado]..."
         : resultadoAEAT.body || "";
 
-    // 5. Respuesta al ERP (Base44)
     return res.status(200).json({
       ok: true,
       mensaje: "Factura enviada a AEAT (entorno pruebas)",
