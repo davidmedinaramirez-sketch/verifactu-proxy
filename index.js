@@ -499,12 +499,9 @@ app.post("/factura", async (req, res) => {
     cliente_es_extranjero: false, // de momento asumimos cliente nacional
 
     // Importes
-    total:
-      typeof p.total === "string" ? parseFloat(p.total) : p.total,
+    total: typeof p.total === "string" ? parseFloat(p.total) : p.total,
     iva_total:
-      typeof p.iva_total === "string"
-        ? parseFloat(p.iva_total)
-        : p.iva_total,
+      typeof p.iva_total === "string" ? parseFloat(p.iva_total) : p.iva_total,
     base_neta:
       typeof p.total === "number" && typeof p.iva_total === "number"
         ? p.total - p.iva_total
