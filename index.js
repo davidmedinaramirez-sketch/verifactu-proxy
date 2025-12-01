@@ -47,393 +47,405 @@ function crearAgenteMTLS() {
 //   UTILIDADES DE FORMATO
 // ==========================
 
-function formatearFechaDDMMYYYY(fechaISO) {
-  if (!fechaISO) return "";
-  const partes = fechaISO.split("-");
-  if (partes.length !== 3) return fechaISO;
-  const [yyyy, mm, dd] = partes;
-  return `${dd}-${mm}-${yyyy}`;
+function toNumberOrZero(v) {
+  if (v === null || v === undefined || v === "") return 0;
+  const n = typeof v === "number" ? v : parseFloat(v);
+  return isNaN(n) ? 0 : n;
+}
+
+function safeStr(v) {
+  if (v === null || v === undefined) return "";
+  return String(v);
+}
+
+function formatearFechaDDMMYYYY(fecha) {
+  // Si ya viene en dd-mm-yyyy, se deja como está
+  if (!fecha) return "";
+  if (/^\d{2}-\d{2}-\d{4}$/.test(fecha)) return fecha;
+
+  // Si viene en ISO (yyyy-mm-dd)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    const [yyyy, mm, dd] = fecha.split("-");
+    return `${dd}-${mm}-${yyyy}`;
+  }
+
+  // Si no sabemos, devolvemos tal cual
+  return fecha;
 }
 
 // ==========================
-//   MAPEADO BASE44 → FACTURA
+//   VALIDACIÓN BÁSICA
+//   (según tu contrato JSON)
 // ==========================
 
-function mapearBase44AFactura(p) {
-  // Adaptamos lo que venga de Base44 al objeto que consume construirXmlAlta.
-  const factura = {
-    // Identificación factura
-    numero_factura: p.numero_factura || p.factura_numero,
-    fecha_emision: p.fecha_emision,
-
-    // Emisor
-    empresa_cif: p.empresa_cif || p.nif_emisor,
-    empresa_razon_social: p.empresa_razon_social || p.nombre_emisor,
-
-    // Destinatario
-    cliente_nombre: p.cliente_nombre,
-    cliente_nif: p.cliente_nif,
-    cliente_es_extranjero: !!p.cliente_es_extranjero,
-    sin_identificacion_destinatario: !!p.sin_identificacion_destinatario,
-    cliente_id_otro_pais: p.cliente_id_otro_pais,
-    cliente_id_otro_type: p.cliente_id_otro_type,
-    cliente_id_otro_id: p.cliente_id_otro_id,
-
-    // Importes
-    total: typeof p.total === "string" ? parseFloat(p.total) : p.total,
-    iva_total:
-      typeof p.iva_total === "string" ? parseFloat(p.iva_total) : p.iva_total,
-    recargo_equivalencia_total:
-      typeof p.recargo_equivalencia_total === "string"
-        ? parseFloat(p.recargo_equivalencia_total)
-        : p.recargo_equivalencia_total || 0,
-    base_neta:
-      typeof p.base_neta === "string" ? parseFloat(p.base_neta) : p.base_neta,
-
-    desglose_fiscal: Array.isArray(p.desglose_fiscal)
-      ? p.desglose_fiscal
-      : [],
-
-    // Campos VeriFactu (BASE44 ya los calcula)
-    verifactu_hash: p.verifactu_hash || p.hash_verifactu,
-    verifactu_hash_anterior:
-      p.verifactu_hash_anterior || p.hash_anterior || "",
-    verifactu_es_primer_registro: !!p.verifactu_es_primer_registro,
-    verifactu_numero_factura_anterior:
-      p.verifactu_numero_factura_anterior || null,
-    verifactu_fecha_factura_anterior:
-      p.verifactu_fecha_factura_anterior || null,
-    verifactu_nif_factura_anterior:
-      p.verifactu_nif_factura_anterior || null,
-    verifactu_firma_fecha: p.verifactu_firma_fecha || new Date().toISOString(),
-
-    // Otros campos
-    tipo_factura: p.tipo_factura || "F1",
-    tipo_rectificativa: p.tipo_rectificativa || null,
-    descripcion_operacion:
-      p.descripcion_operacion || "Operacion facturada desde Base44",
-    verifactu_subsanacion: !!p.verifactu_subsanacion,
-    verifactu_rechazo_previo: !!p.verifactu_rechazo_previo,
-    es_macrodato: !!p.es_macrodato,
-    es_simplificada: !!p.es_simplificada,
-    tiene_cupon: !!p.tiene_cupon,
-    emitida_por_tercero: p.emitida_por_tercero || "N",
-    fecha_operacion: p.fecha_operacion || null,
-    categoria_contabilidad: p.categoria_contabilidad,
-    observaciones: p.observaciones,
-    ref_externa: p.ref_externa
-  };
-
-  return factura;
-}
-
-// ==========================
-//   VALIDACIÓN DE FACTURA
-// ==========================
-
-function validarFactura(factura) {
+function validarRegistroAlta(reg) {
   const errores = [];
 
-  if (!factura.numero_factura) errores.push("numero_factura es obligatorio");
-  if (!factura.fecha_emision) errores.push("fecha_emision es obligatoria");
-  if (!factura.empresa_cif) errores.push("empresa_cif es obligatorio");
-  if (!factura.empresa_razon_social)
-    errores.push("empresa_razon_social es obligatorio");
+  if (!reg.IDVersion) errores.push("IDVersion es obligatorio");
 
-  if (
-    !factura.sin_identificacion_destinatario &&
-    !factura.cliente_nombre
-  ) {
-    errores.push(
-      "cliente_nombre es obligatorio salvo facturas sin identificación de destinatario"
-    );
+  if (!reg.IDFactura) {
+    errores.push("IDFactura es obligatorio");
+  } else {
+    if (!reg.IDFactura.IDEmisorFactura)
+      errores.push("IDFactura.IDEmisorFactura es obligatorio");
+    if (!reg.IDFactura.NumSerieFactura)
+      errores.push("IDFactura.NumSerieFactura es obligatorio");
+    if (!reg.IDFactura.FechaExpedicionFactura)
+      errores.push("IDFactura.FechaExpedicionFactura es obligatorio");
   }
 
-  if (
-    typeof factura.total !== "number" ||
-    isNaN(factura.total)
-  ) {
-    errores.push("total debe ser numérico");
+  if (!reg.NombreRazonEmisor)
+    errores.push("NombreRazonEmisor es obligatorio");
+
+  // Destinatarios: al menos 1
+  if (!Array.isArray(reg.Destinatarios) || reg.Destinatarios.length === 0) {
+    errores.push("Debe existir al menos un elemento en Destinatarios");
+  } else {
+    const d0 = reg.Destinatarios[0];
+    if (!d0.NombreRazon)
+      errores.push("Destinatarios[0].NombreRazon es obligatorio");
+    if (!d0.NIF && !d0.IDOtro) {
+      errores.push(
+        "Destinatarios[0] debe tener NIF o IDOtro (CodigoPais/IDType/ID)"
+      );
+    }
   }
 
-  if (
-    typeof factura.iva_total !== "number" ||
-    isNaN(factura.iva_total)
-  ) {
-    errores.push("iva_total debe ser numérico");
+  // ImporteTotal y CuotaTotal numéricos
+  if (reg.ImporteTotal === undefined || reg.ImporteTotal === null) {
+    errores.push("ImporteTotal es obligatorio");
+  } else if (isNaN(toNumberOrZero(reg.ImporteTotal))) {
+    errores.push("ImporteTotal debe ser numérico");
   }
 
-  if (!factura.verifactu_hash) {
-    errores.push("verifactu_hash es obligatorio (lo genera Base44)");
+  if (reg.CuotaTotal === undefined || reg.CuotaTotal === null) {
+    errores.push("CuotaTotal es obligatorio");
+  } else if (isNaN(toNumberOrZero(reg.CuotaTotal))) {
+    errores.push("CuotaTotal debe ser numérico");
+  }
+
+  // Huella
+  if (!reg.TipoHuella) errores.push("TipoHuella es obligatorio");
+  if (!reg.Huella) errores.push("Huella es obligatoria");
+
+  // SistemaInformatico mínimo
+  if (!reg.SistemaInformatico) {
+    errores.push("SistemaInformatico es obligatorio");
+  } else {
+    if (!reg.SistemaInformatico.NombreSistemaInformatico)
+      errores.push("SistemaInformatico.NombreSistemaInformatico es obligatorio");
+    if (!reg.SistemaInformatico.IdSistemaInformatico)
+      errores.push("SistemaInformatico.IdSistemaInformatico es obligatorio");
+    if (!reg.SistemaInformatico.Version)
+      errores.push("SistemaInformatico.Version es obligatorio");
+    if (!reg.SistemaInformatico.NumeroInstalacion)
+      errores.push("SistemaInformatico.NumeroInstalacion es obligatorio");
   }
 
   return errores;
 }
 
 // ==========================
-//   CONSTRUCCIÓN XML ALTA
-//   (tu función, apenas tocada)
+//   CONSTRUCCIÓN XML SOAP
 // ==========================
 
-function construirXmlAlta(factura) {
-  // ---- Emisor / obligado ----
-  const obligadoNombre = factura.empresa_razon_social || "OBLIGADO EMISOR";
-  const obligadoNif = factura.empresa_cif || "00000000T";
+function construirXmlAltaDesdeCanonico(reg) {
+  const obligadoNif = safeStr(reg.IDFactura.IDEmisorFactura);
+  const numeroFactura = safeStr(reg.IDFactura.NumSerieFactura);
+  const fechaExpedicion = formatearFechaDDMMYYYY(
+    reg.IDFactura.FechaExpedicionFactura
+  );
 
-  // ---- Destinatario ----
-  const clienteNombre = factura.cliente_nombre || "CLIENTE DESCONOCIDO";
-  const clienteNif = factura.cliente_nif || null;
-  const clienteExtranjero = !!factura.cliente_es_extranjero;
-  const clienteCodigoPais = factura.cliente_id_otro_pais || null;
-  const clienteIdType = factura.cliente_id_otro_type || null;
-  const clienteIdExtranjero = factura.cliente_id_otro_id || null;
+  const refExterna = safeStr(reg.RefExterna);
+  const nombreRazonEmisor = safeStr(reg.NombreRazonEmisor);
 
-  // ---- Identificación factura ----
-  const numeroFactura = factura.numero_factura || "SIN-NUMERO";
-  const fechaEmisionISO = factura.fecha_emision || "2025-01-01";
-  const fechaEmision = formatearFechaDDMMYYYY(fechaEmisionISO);
+  const subsanacion = reg.Subsanacion || "N";
+  const rechazoPrevio = reg.RechazoPrevio || "N";
+  const tipoFactura = reg.TipoFactura || "F1";
+  const tipoRectificativa = reg.TipoRectificativa || null;
 
-  const tipoFactura = factura.tipo_factura || "F1"; // F1, F2, F3, R1-R5
-  const tipoRectificativa = factura.tipo_rectificativa || null; // "S" o "I"
-
-  const descripcionOperacion =
-    factura.descripcion_operacion ||
-    factura.observaciones ||
-    factura.categoria_contabilidad ||
-    "Operacion facturada";
-
-  const refExterna = factura.ref_externa || "";
-
-  // ---- Flags varios ----
-  const subsanacion = factura.verifactu_subsanacion ? "S" : "N";
-  const rechazoPrevio = factura.verifactu_rechazo_previo ? "S" : "N";
-
-  const facturaSimplificada =
-    tipoFactura === "F2" || tipoFactura === "F3" || factura.es_simplificada
-      ? "S"
-      : "N";
-  const sinIdentDest = factura.sin_identificacion_destinatario ? "S" : "N";
-  const macrodato = factura.es_macrodato ? "S" : "N";
-
-  const emitidaPorTerceroRaw = factura.emitida_por_tercero || "N";
-  const debeInformarEmitidaPorTercero =
-    emitidaPorTerceroRaw === "T" || emitidaPorTerceroRaw === "D";
-  const emitidaPorTercero = debeInformarEmitidaPorTercero
-    ? emitidaPorTerceroRaw
-    : null;
-
-  const tieneCupon = factura.tiene_cupon ? "S" : "N";
-
-  // ---- Importes / desglose ----
-  const total = typeof factura.total === "number" ? factura.total : 0;
-  const ivaTotal =
-    typeof factura.iva_total === "number" ? factura.iva_total : 0;
-  const recargoEqTotal =
-    typeof factura.recargo_equivalencia_total === "number"
-      ? factura.recargo_equivalencia_total
-      : 0;
-  const cuotaTotal = ivaTotal + recargoEqTotal;
-
-  let desgloseXML = "";
-  if (
-    Array.isArray(factura.desglose_fiscal) &&
-    factura.desglose_fiscal.length > 0
-  ) {
-    factura.desglose_fiscal.forEach((d) => {
-      const impuesto = d.impuesto || "01"; // 01=IVA
-      const claveRegimen = d.clave_regimen || "01";
-      const califOperacion = d.calificacion_operacion || "S1";
-      const operacionExenta = d.operacion_exenta || "";
-      const tipoImpositivo =
-        typeof d.tipo_impositivo === "number" ? d.tipo_impositivo : 0;
-      const baseImponible =
-        typeof d.base_imponible === "number" ? d.base_imponible : 0;
-      const cuotaRep =
-        typeof d.cuota_repercutida === "number" ? d.cuota_repercutida : 0;
-      const tipoReqEq =
-        typeof d.tipo_recargo_equivalencia === "number"
-          ? d.tipo_recargo_equivalencia
-          : 0;
-      const cuotaReqEq =
-        typeof d.cuota_recargo_equivalencia === "number"
-          ? d.cuota_recargo_equivalencia
-          : 0;
-
-      desgloseXML += `
-            <sum1:DetalleDesglose>
-              <sum1:Impuesto>${impuesto}</sum1:Impuesto>
-              <sum1:ClaveRegimen>${claveRegimen}</sum1:ClaveRegimen>
-              <sum1:CalificacionOperacion>${califOperacion}</sum1:CalificacionOperacion>
-              ${
-                operacionExenta
-                  ? `<sum1:OperacionExenta>${operacionExenta}</sum1:OperacionExenta>`
-                  : ""
-              }
-              <sum1:TipoImpositivo>${tipoImpositivo.toFixed(
-                2
-              )}</sum1:TipoImpositivo>
-              <sum1:BaseImponibleOimporteNoSujeto>${baseImponible.toFixed(
-                2
-              )}</sum1:BaseImponibleOimporteNoSujeto>
-              <sum1:CuotaRepercutida>${cuotaRep.toFixed(
-                2
-              )}</sum1:CuotaRepercutida>
-              ${
-                tipoReqEq
-                  ? `<sum1:TipoRecargoEquivalencia>${tipoReqEq.toFixed(
-                      2
-                    )}</sum1:TipoRecargoEquivalencia>`
-                  : ""
-              }
-              ${
-                cuotaReqEq
-                  ? `<sum1:CuotaRecargoEquivalencia>${cuotaReqEq.toFixed(
-                      2
-                    )}</sum1:CuotaRecargoEquivalencia>`
-                  : ""
-              }
-            </sum1:DetalleDesglose>`;
-    });
-  } else {
-    const base =
-      typeof factura.base_neta === "number" ? factura.base_neta : 0;
-    const tipoImp = base > 0 ? (ivaTotal / base) * 100 : 0;
-    desgloseXML = `
-            <sum1:DetalleDesglose>
-              <sum1:Impuesto>01</sum1:Impuesto>
-              <sum1:ClaveRegimen>01</sum1:ClaveRegimen>
-              <sum1:CalificacionOperacion>S1</sum1:CalificacionOperacion>
-              <sum1:TipoImpositivo>${tipoImp.toFixed(
-                2
-              )}</sum1:TipoImpositivo>
-              <sum1:BaseImponibleOimporteNoSujeto>${base.toFixed(
-                2
-              )}</sum1:BaseImponibleOimporteNoSujeto>
-              <sum1:CuotaRepercutida>${ivaTotal.toFixed(
-                2
-              )}</sum1:CuotaRepercutida>
-            </sum1:DetalleDesglose>`;
-  }
-
-  // ---- Destinatarios: NIF o IDOtro ----
-  let destinatarioXML = "";
-  if (!clienteExtranjero && clienteNif && !factura.sin_identificacion_destinatario) {
-    destinatarioXML = `
-        <sum1:Destinatarios>
-          <sum1:IDDestinatario>
-            <sum1:NombreRazon>${clienteNombre}</sum1:NombreRazon>
-            <sum1:NIF>${clienteNif}</sum1:NIF>
-          </sum1:IDDestinatario>
-        </sum1:Destinatarios>`;
-  } else {
-    destinatarioXML = `
-        <sum1:Destinatarios>
-          <sum1:IDDestinatario>
-            <sum1:NombreRazon>${clienteNombre}</sum1:NombreRazon>
-            <sum1:IDOtro>
-              ${
-                clienteCodigoPais
-                  ? `<sum1:CodigoPais>${clienteCodigoPais}</sum1:CodigoPais>`
-                  : ""
-              }
-              ${
-                clienteIdType
-                  ? `<sum1:IDType>${clienteIdType}</sum1:IDType>`
-                  : ""
-              }
-              ${
-                clienteIdExtranjero
-                  ? `<sum1:ID>${clienteIdExtranjero}</sum1:ID>`
-                  : ""
-              }
-            </sum1:IDOtro>
-          </sum1:IDDestinatario>
-        </sum1:Destinatarios>`;
-  }
-
-  // ---- Encadenamiento ----
-  const esPrimerRegistro = !!factura.verifactu_es_primer_registro;
-  const hashAnterior = factura.verifactu_hash_anterior || "";
-  const numFactAnt = factura.verifactu_numero_factura_anterior || "";
-  const nifFactAnt = factura.verifactu_nif_factura_anterior || obligadoNif;
-  const fechaFactAntISO = factura.verifactu_fecha_factura_anterior || "";
-  const fechaFactAnt = fechaFactAntISO
-    ? formatearFechaDDMMYYYY(fechaFactAntISO)
+  const fechaOperacionXML = reg.FechaOperacion
+    ? `<sum1:FechaOperacion>${formatearFechaDDMMYYYY(
+        reg.FechaOperacion
+      )}</sum1:FechaOperacion>`
     : "";
 
+  const descripcionOperacion =
+    reg.DescripcionOperacion || "Operacion facturada desde Base44";
+
+  const facturaSimplificada =
+    reg.FacturaSimplificadaArt7273 || "N";
+  const facturaSinIdentDest =
+    reg.FacturaSinIdentifDestinatarioArt61d || "N";
+  const macrodato = reg.Macrodato || "N";
+
+  const cupon = reg.Cupon || "N";
+
+  const tipoHuella = reg.TipoHuella || "01";
+  const huella = safeStr(reg.Huella);
+  const fechaHoraHusoGen =
+    reg.FechaHoraHusoGenRegistro || new Date().toISOString();
+
+  // ----- Destinatarios -----
+  let destinatariosXML = "";
+  if (Array.isArray(reg.Destinatarios)) {
+    reg.Destinatarios.forEach((dest) => {
+      const nombre = safeStr(dest.NombreRazon);
+      const nif = dest.NIF ? safeStr(dest.NIF) : null;
+      let idOtroXML = "";
+
+      if (dest.IDOtro) {
+        const codPais = safeStr(dest.IDOtro.CodigoPais);
+        const idType = safeStr(dest.IDOtro.IDType);
+        const idVal = safeStr(dest.IDOtro.ID);
+
+        idOtroXML = `
+              <sum1:IDOtro>
+                ${codPais ? `<sum1:CodigoPais>${codPais}</sum1:CodigoPais>` : ""}
+                ${idType ? `<sum1:IDType>${idType}</sum1:IDType>` : ""}
+                ${idVal ? `<sum1:ID>${idVal}</sum1:ID>` : ""}
+              </sum1:IDOtro>`;
+      }
+
+      destinatariosXML += `
+          <sum1:Destinatarios>
+            <sum1:IDDestinatario>
+              <sum1:NombreRazon>${nombre}</sum1:NombreRazon>
+              ${nif ? `<sum1:NIF>${nif}</sum1:NIF>` : ""}
+              ${idOtroXML}
+            </sum1:IDDestinatario>
+          </sum1:Destinatarios>`;
+    });
+  }
+
+  // ----- Tercero -----
+  let emitidaPorTerceroXML = "";
+  const ept = reg.EmitidaPorTerceroODestinatario;
+  if (ept === "T" || ept === "D") {
+    const t = reg.Tercero || {};
+    const tNombre = safeStr(t.NombreRazon);
+    const tNif = safeStr(t.NIF);
+    let tIDOtro = "";
+
+    if (t.IDOtro) {
+      const codPais = safeStr(t.IDOtro.CodigoPais);
+      const idType = safeStr(t.IDOtro.IDType);
+      const idVal = safeStr(t.IDOtro.ID);
+
+      tIDOtro = `
+              <sum1:IDOtro>
+                ${codPais ? `<sum1:CodigoPais>${codPais}</sum1:CodigoPais>` : ""}
+                ${idType ? `<sum1:IDType>${idType}</sum1:IDType>` : ""}
+                ${idVal ? `<sum1:ID>${idVal}</sum1:ID>` : ""}
+              </sum1:IDOtro>`;
+    }
+
+    emitidaPorTerceroXML = `
+          <sum1:EmitidaPorTerceroODestinatario>${ept}</sum1:EmitidaPorTerceroODestinatario>
+          <sum1:Tercero>
+            ${tNombre ? `<sum1:NombreRazon>${tNombre}</sum1:NombreRazon>` : ""}
+            ${tNif ? `<sum1:NIF>${tNif}</sum1:NIF>` : ""}
+            ${tIDOtro}
+          </sum1:Tercero>`;
+  }
+
+  // ----- DetalleDesglose -----
+  let desgloseXML = "";
+  const detalles = Array.isArray(reg.DetalleDesglose)
+    ? reg.DetalleDesglose
+    : [];
+  detalles.forEach((d) => {
+    const impuesto = safeStr(d.Impuesto || "01");
+    const claveRegimen = safeStr(d.ClaveRegimen || "01");
+    const califOperacion = safeStr(d.CalificacionOperacion || "S1");
+    const operacionExenta = safeStr(d.OperacionExenta || "");
+
+    const tipoImpositivo = toNumberOrZero(d.TipoImpositivo);
+    const base = toNumberOrZero(d.BaseImponibleOimporteNoSujeto);
+    const cuota = toNumberOrZero(d.CuotaRepercutida);
+    const tipoReqEq = toNumberOrZero(d.TipoRecargoEquivalencia);
+    const cuotaReqEq = toNumberOrZero(d.CuotaRecargoEquivalencia);
+
+    desgloseXML += `
+          <sum1:DetalleDesglose>
+            <sum1:Impuesto>${impuesto}</sum1:Impuesto>
+            <sum1:ClaveRegimen>${claveRegimen}</sum1:ClaveRegimen>
+            <sum1:CalificacionOperacion>${califOperacion}</sum1:CalificacionOperacion>
+            ${
+              operacionExenta
+                ? `<sum1:OperacionExenta>${operacionExenta}</sum1:OperacionExenta>`
+                : ""
+            }
+            <sum1:TipoImpositivo>${tipoImpositivo.toFixed(
+              2
+            )}</sum1:TipoImpositivo>
+            <sum1:BaseImponibleOimporteNoSujeto>${base.toFixed(
+              2
+            )}</sum1:BaseImponibleOimporteNoSujeto>
+            <sum1:CuotaRepercutida>${cuota.toFixed(
+              2
+            )}</sum1:CuotaRepercutida>
+            ${
+              tipoReqEq
+                ? `<sum1:TipoRecargoEquivalencia>${tipoReqEq.toFixed(
+                    2
+                  )}</sum1:TipoRecargoEquivalencia>`
+                : ""
+            }
+            ${
+              cuotaReqEq
+                ? `<sum1:CuotaRecargoEquivalencia>${cuotaReqEq.toFixed(
+                    2
+                  )}</sum1:CuotaRecargoEquivalencia>`
+                : ""
+            }
+          </sum1:DetalleDesglose>`;
+  });
+
+  // ----- FacturasRectificadas & ImporteRectificacion -----
+  let rectificadasXML = "";
+  if (
+    Array.isArray(reg.FacturasRectificadas) &&
+    reg.FacturasRectificadas.length > 0
+  ) {
+    const frList = reg.FacturasRectificadas
+      .map((f) => {
+        const fNif = safeStr(f.IDEmisorFactura || obligadoNif);
+        const fNum = safeStr(f.NumSerieFactura || "");
+        const fFecha = formatearFechaDDMMYYYY(
+          f.FechaExpedicionFactura || ""
+        );
+        return `
+            <sum1:IDFacturaRectificada>
+              <sum1:IDEmisorFactura>${fNif}</sum1:IDEmisorFactura>
+              <sum1:NumSerieFactura>${fNum}</sum1:NumSerieFactura>
+              <sum1:FechaExpedicionFactura>${fFecha}</sum1:FechaExpedicionFactura>
+            </sum1:IDFacturaRectificada>`;
+      })
+      .join("");
+
+    const impRect = reg.ImporteRectificacion || {};
+    const baseRect = toNumberOrZero(impRect.BaseRectificada);
+    const cuotaRect = toNumberOrZero(impRect.CuotaRectificada);
+    const cuotaRecRect = toNumberOrZero(impRect.CuotaRecargoRectificado);
+
+    rectificadasXML = `
+          <sum1:FacturasRectificadas>
+            ${frList}
+          </sum1:FacturasRectificadas>
+          <sum1:ImporteRectificacion>
+            <sum1:BaseRectificada>${baseRect.toFixed(2)}</sum1:BaseRectificada>
+            <sum1:CuotaRectificada>${cuotaRect.toFixed(
+              2
+            )}</sum1:CuotaRectificada>
+            <sum1:CuotaRecargoRectificado>${cuotaRecRect.toFixed(
+              2
+            )}</sum1:CuotaRecargoRectificado>
+          </sum1:ImporteRectificacion>`;
+  }
+
+  // ----- Encadenamiento -----
   let encadenamientoXML = "";
-  if (esPrimerRegistro) {
+  const enc = reg.Encadenamiento || {};
+  if (enc.PrimerRegistro === "S") {
     encadenamientoXML = `
           <sum1:Encadenamiento>
             <sum1:PrimerRegistro>S</sum1:PrimerRegistro>
           </sum1:Encadenamiento>`;
-  } else if (hashAnterior && numFactAnt && fechaFactAnt) {
+  } else if (enc.RegistroAnterior) {
+    const ra = enc.RegistroAnterior;
+    const raNif = safeStr(ra.IDEmisorFactura || obligadoNif);
+    const raNum = safeStr(ra.NumSerieFactura || "");
+    const raFecha = formatearFechaDDMMYYYY(
+      ra.FechaExpedicionFactura || ""
+    );
+    const raHash = safeStr(ra.Huella || "");
+
     encadenamientoXML = `
           <sum1:Encadenamiento>
             <sum1:PrimerRegistro>N</sum1:PrimerRegistro>
             <sum1:RegistroAnterior>
-              <sum1:IDEmisorFactura>${nifFactAnt}</sum1:IDEmisorFactura>
-              <sum1:NumSerieFactura>${numFactAnt}</sum1:NumSerieFactura>
-              <sum1:FechaExpedicionFactura>${fechaFactAnt}</sum1:FechaExpedicionFactura>
-              <sum1:Huella>${hashAnterior}</sum1:Huella>
+              <sum1:IDEmisorFactura>${raNif}</sum1:IDEmisorFactura>
+              <sum1:NumSerieFactura>${raNum}</sum1:NumSerieFactura>
+              <sum1:FechaExpedicionFactura>${raFecha}</sum1:FechaExpedicionFactura>
+              <sum1:Huella>${raHash}</sum1:Huella>
             </sum1:RegistroAnterior>
           </sum1:Encadenamiento>`;
   }
 
-  // ---- Huella actual / fecha generación ----
-  const tipoHuella = "01"; // SHA-256
-  const huella = factura.verifactu_hash || "";
-  const fechaHoraGen =
-    factura.verifactu_firma_fecha || new Date().toISOString();
+  // ----- SistemaInformatico -----
+  const sis = reg.SistemaInformatico || {};
+  const sisNombreRazon = safeStr(sis.NombreRazon);
+  const sisNif = safeStr(sis.NIF);
+  let sisIdOtroXML = "";
+  if (sis.IDOtro) {
+    const codPais = safeStr(sis.IDOtro.CodigoPais);
+    const idType = safeStr(sis.IDOtro.IDType);
+    const idVal = safeStr(sis.IDOtro.ID);
+    sisIdOtroXML = `
+              <sum1:IDOtro>
+                ${codPais ? `<sum1:CodigoPais>${codPais}</sum1:CodigoPais>` : ""}
+                ${idType ? `<sum1:IDType>${idType}</sum1:IDType>` : ""}
+                ${idVal ? `<sum1:ID>${idVal}</sum1:ID>` : ""}
+              </sum1:IDOtro>`;
+  }
 
-  const fechaOperacionXML = factura.fecha_operacion
-    ? `<sum1:FechaOperacion>${formatearFechaDDMMYYYY(
-        factura.fecha_operacion
-      )}</sum1:FechaOperacion>`
-    : "";
-
-  // ---- SistemaInformatico ----
-  const sistemaNombreRazon = obligadoNombre;
-  const sistemaNif = obligadoNif;
-  const nombreSistema = "BASE44 ERP GANADERO";
-  const idSistema = "01";
-  const versionSistema = "1.0";
-  const numeroInstalacion = "BASE44-ERP-001";
-  const tipoUsoSoloVerifactu = "S";
-  const tipoUsoMultiOT = "N";
-  const indicadorMultiplesOT = "N";
+  const nombreSis = safeStr(sis.NombreSistemaInformatico);
+  const idSis = safeStr(sis.IdSistemaInformatico);
+  const verSis = safeStr(sis.Version);
+  const numInst = safeStr(sis.NumeroInstalacion);
+  const tipoUsoSoloVF = safeStr(sis.TipoUsoPosibleSoloVerifactu || "N");
+  const tipoUsoMultiOT = safeStr(sis.TipoUsoPosibleMultiOT || "N");
+  const indicadorMultiplesOT = safeStr(sis.IndicadorMultiplesOT || "N");
 
   const sistemaInformaticoXML = `
           <sum1:SistemaInformatico>
-            <sum1:NombreRazon>${sistemaNombreRazon}</sum1:NombreRazon>
-            <sum1:NIF>${sistemaNif}</sum1:NIF>
-            <sum1:NombreSistemaInformatico>${nombreSistema}</sum1:NombreSistemaInformatico>
-            <sum1:IdSistemaInformatico>${idSistema}</sum1:IdSistemaInformatico>
-            <sum1:Version>${versionSistema}</sum1:Version>
-            <sum1:NumeroInstalacion>${numeroInstalacion}</sum1:NumeroInstalacion>
-            <sum1:TipoUsoPosibleSoloVerifactu>${tipoUsoSoloVerifactu}</sum1:TipoUsoPosibleSoloVerifactu>
+            ${
+              sisNombreRazon
+                ? `<sum1:NombreRazon>${sisNombreRazon}</sum1:NombreRazon>`
+                : ""
+            }
+            ${
+              sisNif
+                ? `<sum1:NIF>${sisNif}</sum1:NIF>`
+                : ""
+            }
+            ${sisIdOtroXML}
+            <sum1:NombreSistemaInformatico>${nombreSis}</sum1:NombreSistemaInformatico>
+            <sum1:IdSistemaInformatico>${idSis}</sum1:IdSistemaInformatico>
+            <sum1:Version>${verSis}</sum1:Version>
+            <sum1:NumeroInstalacion>${numInst}</sum1:NumeroInstalacion>
+            <sum1:TipoUsoPosibleSoloVerifactu>${tipoUsoSoloVF}</sum1:TipoUsoPosibleSoloVerifactu>
             <sum1:TipoUsoPosibleMultiOT>${tipoUsoMultiOT}</sum1:TipoUsoPosibleMultiOT>
             <sum1:IndicadorMultiplesOT>${indicadorMultiplesOT}</sum1:IndicadorMultiplesOT>
           </sum1:SistemaInformatico>`;
 
-  // ---- Bloque opcional EmitidaPorTercero + Tercero ----
-  let emitidaPorTerceroXML = "";
-  if (emitidaPorTercero) {
-    emitidaPorTerceroXML = `
-          <sum1:EmitidaPorTerceroODestinatario>${emitidaPorTercero}</sum1:EmitidaPorTerceroODestinatario>
-          <sum1:Tercero>
+  // ----- Acuerdo facturación -----
+  let acuerdoXML = "";
+  const numRegAcuerdo = reg.NumRegistroAcuerdoFacturacion || reg.NumRegistroAcuerdo || null;
+  const idAcuerdoSI = reg.IdAcuerdoSistemaInformatico || null;
+  if (numRegAcuerdo || idAcuerdoSI) {
+    acuerdoXML = `
+          <sum1:DatosAcuerdoFacturacion>
             ${
-              factura.tercero_nombre
-                ? `<sum1:NombreRazon>${factura.tercero_nombre}</sum1:NombreRazon>`
+              numRegAcuerdo
+                ? `<sum1:NumRegistroAcuerdoFacturacion>${safeStr(
+                    numRegAcuerdo
+                  )}</sum1:NumRegistroAcuerdoFacturacion>`
                 : ""
             }
             ${
-              factura.tercero_nif
-                ? `<sum1:NIF>${factura.tercero_nif}</sum1:NIF>`
+              idAcuerdoSI
+                ? `<sum1:IdAcuerdoSistemaInformatico>${safeStr(
+                    idAcuerdoSI
+                  )}</sum1:IdAcuerdoSistemaInformatico>`
                 : ""
             }
-          </sum1:Tercero>`;
+          </sum1:DatosAcuerdoFacturacion>`;
   }
+
+  const cuotaTotal = toNumberOrZero(reg.CuotaTotal);
+  const importeTotal = toNumberOrZero(reg.ImporteTotal);
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -444,20 +456,20 @@ function construirXmlAlta(factura) {
     <sum:RegFactuSistemaFacturacion>
       <sum:Cabecera>
         <sum1:ObligadoEmision>
-          <sum1:NombreRazon>${obligadoNombre}</sum1:NombreRazon>
+          <sum1:NombreRazon>${nombreRazonEmisor}</sum1:NombreRazon>
           <sum1:NIF>${obligadoNif}</sum1:NIF>
         </sum1:ObligadoEmision>
       </sum:Cabecera>
       <sum:RegistroFactura>
         <sum1:RegistroAlta>
-          <sum1:IDVersion>1.0</sum1:IDVersion>
+          <sum1:IDVersion>${safeStr(reg.IDVersion)}</sum1:IDVersion>
           <sum1:IDFactura>
             <sum1:IDEmisorFactura>${obligadoNif}</sum1:IDEmisorFactura>
             <sum1:NumSerieFactura>${numeroFactura}</sum1:NumSerieFactura>
-            <sum1:FechaExpedicionFactura>${fechaEmision}</sum1:FechaExpedicionFactura>
+            <sum1:FechaExpedicionFactura>${fechaExpedicion}</sum1:FechaExpedicionFactura>
           </sum1:IDFactura>
           <sum1:RefExterna>${refExterna}</sum1:RefExterna>
-          <sum1:NombreRazonEmisor>${obligadoNombre}</sum1:NombreRazonEmisor>
+          <sum1:NombreRazonEmisor>${nombreRazonEmisor}</sum1:NombreRazonEmisor>
           <sum1:Subsanacion>${subsanacion}</sum1:Subsanacion>
           <sum1:RechazoPrevio>${rechazoPrevio}</sum1:RechazoPrevio>
           <sum1:TipoFactura>${tipoFactura}</sum1:TipoFactura>
@@ -466,22 +478,24 @@ function construirXmlAlta(factura) {
               ? `<sum1:TipoRectificativa>${tipoRectificativa}</sum1:TipoRectificativa>`
               : ""
           }
+          ${rectificadasXML}
           ${fechaOperacionXML}
           <sum1:DescripcionOperacion>${descripcionOperacion}</sum1:DescripcionOperacion>
           <sum1:FacturaSimplificadaArt7273>${facturaSimplificada}</sum1:FacturaSimplificadaArt7273>
-          <sum1:FacturaSinIdentifDestinatarioArt61d>${sinIdentDest}</sum1:FacturaSinIdentifDestinatarioArt61d>
+          <sum1:FacturaSinIdentifDestinatarioArt61d>${facturaSinIdentDest}</sum1:FacturaSinIdentifDestinatarioArt61d>
           <sum1:Macrodato>${macrodato}</sum1:Macrodato>
           ${emitidaPorTerceroXML}
-          ${destinatarioXML}
-          <sum1:Cupon>${tieneCupon}</sum1:Cupon>
+          ${destinatariosXML}
+          <sum1:Cupon>${cupon}</sum1:Cupon>
           <sum1:Desglose>
             ${desgloseXML}
           </sum1:Desglose>
           <sum1:CuotaTotal>${cuotaTotal.toFixed(2)}</sum1:CuotaTotal>
-          <sum1:ImporteTotal>${total.toFixed(2)}</sum1:ImporteTotal>
+          <sum1:ImporteTotal>${importeTotal.toFixed(2)}</sum1:ImporteTotal>
           ${encadenamientoXML}
           ${sistemaInformaticoXML}
-          <sum1:FechaHoraHusoGenRegistro>${fechaHoraGen}</sum1:FechaHoraHusoGenRegistro>
+          ${acuerdoXML}
+          <sum1:FechaHoraHusoGenRegistro>${fechaHoraHusoGen}</sum1:FechaHoraHusoGenRegistro>
           <sum1:TipoHuella>${tipoHuella}</sum1:TipoHuella>
           <sum1:Huella>${huella}</sum1:Huella>
         </sum1:RegistroAlta>
@@ -554,7 +568,7 @@ function enviarXmlAEAT(soapBody) {
 
 app.get("/", (req, res) => {
   const estado = certBuffer ? "CARGADO" : "NO CARGADO";
-  res.send("Microservicio Verifactu. Certificado: " + estado);
+  res.send("Microservicio Verifactu (RegistroAlta). Certificado: " + estado);
 });
 
 app.get("/test-mtls", (req, res) => {
@@ -569,6 +583,7 @@ app.get("/test-mtls", (req, res) => {
 
 // ==========================
 //   ENDPOINT /factura
+//   (RECIBE RegistroAlta JSON CANÓNICO)
 // ==========================
 
 app.post("/factura", async (req, res) => {
@@ -587,42 +602,24 @@ app.post("/factura", async (req, res) => {
     });
   }
 
-  const payloadBase44 = req.body;
+  const registroAlta = req.body;
 
-  console.log("### PAYLOAD RECIBIDO DE BASE44 ###");
-  console.log(JSON.stringify(payloadBase44, null, 2));
+  console.log("### RegistroAlta RECIBIDO DE BASE44 ###");
+  console.log(JSON.stringify(registroAlta, null, 2));
 
-  const factura = mapearBase44AFactura(payloadBase44);
-  const errores = validarFactura(factura);
+  const errores = validarRegistroAlta(registroAlta);
 
   if (errores.length > 0) {
-    console.log("❌ Factura inválida:", errores);
+    console.log("❌ RegistroAlta inválido:", errores);
     return res.status(400).json({
       ok: false,
-      error: "Factura inválida",
+      error: "RegistroAlta inválido",
       detalles: errores
     });
   }
 
-  console.log("📥 Factura adaptada (resumen):");
-  console.log(
-    JSON.stringify(
-      {
-        numero_factura: factura.numero_factura,
-        tipo_factura: factura.tipo_factura,
-        fecha_emision: factura.fecha_emision,
-        cliente_nombre: factura.cliente_nombre,
-        cliente_nif: factura.cliente_nif,
-        total: factura.total,
-        iva_total: factura.iva_total
-      },
-      null,
-      2
-    )
-  );
-
   try {
-    const xml = construirXmlAlta(factura);
+    const xml = construirXmlAltaDesdeCanonico(registroAlta);
     const resultadoAEAT = await enviarXmlAEAT(xml);
 
     const resumen =
@@ -632,8 +629,8 @@ app.post("/factura", async (req, res) => {
 
     return res.status(200).json({
       ok: true,
-      mensaje: "Factura enviada a AEAT (entorno pruebas)",
-      factura_enviada: factura,
+      mensaje: "RegistroAlta enviado a AEAT (entorno pruebas)",
+      registroAlta,
       xml_enviado: xml,
       aeat: {
         httpStatus: resultadoAEAT.statusCode,
@@ -641,62 +638,13 @@ app.post("/factura", async (req, res) => {
       }
     });
   } catch (err) {
-    console.error("❌ Error al enviar factura a AEAT:", err.message);
+    console.error("❌ Error al enviar a AEAT:", err.message);
 
     return res.status(500).json({
       ok: false,
-      error: "Error al enviar la factura a la AEAT",
+      error: "Error al enviar a la AEAT",
       detalle: err.message
     });
-  }
-});
-
-// ==========================
-//   TEST AEAT MANUAL
-// ==========================
-
-app.get("/test-aeat", async (req, res) => {
-  try {
-    const facturaFake = {
-      numero_factura: "VF-TEST-0001",
-      tipo_factura: "F1",
-      fecha_emision: "2025-01-01",
-      descripcion_operacion: "Prueba manual /test-aeat",
-      empresa_razon_social: "EMPRESA PRUEBA VERIFACTU",
-      empresa_cif: "B45440955",
-      cliente_nombre: "CLIENTE PRUEBA",
-      cliente_nif: "99999999R",
-      cliente_es_extranjero: false,
-      base_neta: 100,
-      iva_total: 21,
-      recargo_equivalencia_total: 0,
-      total: 121,
-      verifactu_hash: "FAKEHASH1234567890",
-      verifactu_es_primer_registro: true,
-      verifactu_firma_fecha: "2025-01-01T12:00:00+01:00",
-      emitida_por_tercero: "N"
-    };
-
-    const xml = construirXmlAlta(facturaFake);
-    const resultado = await enviarXmlAEAT(xml);
-
-    const resumen =
-      resultado.body && resultado.body.length > 4000
-        ? resultado.body.slice(0, 4000) + "\n...[truncado]..."
-        : resultado.body || "";
-
-    res
-      .status(200)
-      .send(
-        "Código AEAT: " +
-          resultado.statusCode +
-          "\n\nXML enviado:\n" +
-          xml +
-          "\n\nRespuesta:\n" +
-          resumen
-      );
-  } catch (err) {
-    res.status(500).send("Error en /test-aeat: " + err.message);
   }
 });
 
@@ -705,5 +653,5 @@ app.get("/test-aeat", async (req, res) => {
 // ==========================
 
 app.listen(PORT, () => {
-  console.log(`Servidor Verifactu escuchando en puerto ${PORT}`);
+  console.log(`Servidor Verifactu (RegistroAlta) escuchando en puerto ${PORT}`);
 });
