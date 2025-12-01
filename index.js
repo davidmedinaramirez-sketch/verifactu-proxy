@@ -1,16 +1,20 @@
 const fs = require("fs");
 const https = require("https");
 const express = require("express");
+
 const app = express();
-
 const PORT = process.env.PORT || 3000;
+const API_KEY = process.env.FACTURA_API_KEY || null;
 
-// Para recibir JSON
+// ==========================
+//  MIDDLEWARE BÁSICO
+// ==========================
 app.use(express.json());
 
-// =====================================================
-//   CARGA DEL CERTIFICADO FNMT DESDE SECRET FILE
-// =====================================================
+// ==========================
+//   CERTIFICADO FNMT / MTLS
+// ==========================
+
 let certBuffer = null;
 let certPassphrase = process.env.FNMT_CERT_PASS || null;
 
@@ -22,16 +26,11 @@ try {
 
   certBuffer = Buffer.from(certBase64, "base64");
 
-  console.log(
-    "✅ Certificado FNMT cargado. Tamaño:",
-    certBuffer.length,
-    "bytes"
-  );
+  console.log("✅ Certificado FNMT cargado. Tamaño:", certBuffer.length, "bytes");
 } catch (err) {
   console.warn("⚠️ No se pudo cargar el certificado FNMT:", err.message);
 }
 
-// Crear agente MTLS con pfx + passphrase
 function crearAgenteMTLS() {
   if (!certBuffer || !certPassphrase) {
     throw new Error("Certificado o contraseña no disponibles");
@@ -40,34 +39,13 @@ function crearAgenteMTLS() {
   return new https.Agent({
     pfx: certBuffer,
     passphrase: certPassphrase,
-    rejectUnauthorized: true,
+    rejectUnauthorized: true
   });
 }
 
-// =====================================================
-//                    RUTAS BÁSICAS
-// =====================================================
-
-// Estado general
-app.get("/", (req, res) => {
-  const estado = certBuffer ? "CARGADO" : "NO CARGADO";
-  res.send("Microservicio Verifactu. Certificado: " + estado);
-});
-
-// Test MTLS (solo crea el agente)
-app.get("/test-mtls", (req, res) => {
-  try {
-    const agent = crearAgenteMTLS();
-    const ok = typeof agent.createConnection === "function";
-    res.send("Agente MTLS creado. createConnection=" + ok);
-  } catch (err) {
-    res.status(500).send("Error MTLS: " + err.message);
-  }
-});
-
-// =====================================================
-//    UTILIDADES: FECHAS, XML Y LLAMADA A LA AEAT
-// =====================================================
+// ==========================
+//   UTILIDADES DE FORMATO
+// ==========================
 
 function formatearFechaDDMMYYYY(fechaISO) {
   if (!fechaISO) return "";
@@ -77,7 +55,126 @@ function formatearFechaDDMMYYYY(fechaISO) {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-// Construye un XML de RegistroAlta a partir del JSON de factura
+// ==========================
+//   MAPEADO BASE44 → FACTURA
+// ==========================
+
+function mapearBase44AFactura(p) {
+  // Adaptamos lo que venga de Base44 al objeto que consume construirXmlAlta.
+  const factura = {
+    // Identificación factura
+    numero_factura: p.numero_factura || p.factura_numero,
+    fecha_emision: p.fecha_emision,
+
+    // Emisor
+    empresa_cif: p.empresa_cif || p.nif_emisor,
+    empresa_razon_social: p.empresa_razon_social || p.nombre_emisor,
+
+    // Destinatario
+    cliente_nombre: p.cliente_nombre,
+    cliente_nif: p.cliente_nif,
+    cliente_es_extranjero: !!p.cliente_es_extranjero,
+    sin_identificacion_destinatario: !!p.sin_identificacion_destinatario,
+    cliente_id_otro_pais: p.cliente_id_otro_pais,
+    cliente_id_otro_type: p.cliente_id_otro_type,
+    cliente_id_otro_id: p.cliente_id_otro_id,
+
+    // Importes
+    total: typeof p.total === "string" ? parseFloat(p.total) : p.total,
+    iva_total:
+      typeof p.iva_total === "string" ? parseFloat(p.iva_total) : p.iva_total,
+    recargo_equivalencia_total:
+      typeof p.recargo_equivalencia_total === "string"
+        ? parseFloat(p.recargo_equivalencia_total)
+        : p.recargo_equivalencia_total || 0,
+    base_neta:
+      typeof p.base_neta === "string" ? parseFloat(p.base_neta) : p.base_neta,
+
+    desglose_fiscal: Array.isArray(p.desglose_fiscal)
+      ? p.desglose_fiscal
+      : [],
+
+    // Campos VeriFactu (BASE44 ya los calcula)
+    verifactu_hash: p.verifactu_hash || p.hash_verifactu,
+    verifactu_hash_anterior:
+      p.verifactu_hash_anterior || p.hash_anterior || "",
+    verifactu_es_primer_registro: !!p.verifactu_es_primer_registro,
+    verifactu_numero_factura_anterior:
+      p.verifactu_numero_factura_anterior || null,
+    verifactu_fecha_factura_anterior:
+      p.verifactu_fecha_factura_anterior || null,
+    verifactu_nif_factura_anterior:
+      p.verifactu_nif_factura_anterior || null,
+    verifactu_firma_fecha: p.verifactu_firma_fecha || new Date().toISOString(),
+
+    // Otros campos
+    tipo_factura: p.tipo_factura || "F1",
+    tipo_rectificativa: p.tipo_rectificativa || null,
+    descripcion_operacion:
+      p.descripcion_operacion || "Operacion facturada desde Base44",
+    verifactu_subsanacion: !!p.verifactu_subsanacion,
+    verifactu_rechazo_previo: !!p.verifactu_rechazo_previo,
+    es_macrodato: !!p.es_macrodato,
+    es_simplificada: !!p.es_simplificada,
+    tiene_cupon: !!p.tiene_cupon,
+    emitida_por_tercero: p.emitida_por_tercero || "N",
+    fecha_operacion: p.fecha_operacion || null,
+    categoria_contabilidad: p.categoria_contabilidad,
+    observaciones: p.observaciones,
+    ref_externa: p.ref_externa
+  };
+
+  return factura;
+}
+
+// ==========================
+//   VALIDACIÓN DE FACTURA
+// ==========================
+
+function validarFactura(factura) {
+  const errores = [];
+
+  if (!factura.numero_factura) errores.push("numero_factura es obligatorio");
+  if (!factura.fecha_emision) errores.push("fecha_emision es obligatoria");
+  if (!factura.empresa_cif) errores.push("empresa_cif es obligatorio");
+  if (!factura.empresa_razon_social)
+    errores.push("empresa_razon_social es obligatorio");
+
+  if (
+    !factura.sin_identificacion_destinatario &&
+    !factura.cliente_nombre
+  ) {
+    errores.push(
+      "cliente_nombre es obligatorio salvo facturas sin identificación de destinatario"
+    );
+  }
+
+  if (
+    typeof factura.total !== "number" ||
+    isNaN(factura.total)
+  ) {
+    errores.push("total debe ser numérico");
+  }
+
+  if (
+    typeof factura.iva_total !== "number" ||
+    isNaN(factura.iva_total)
+  ) {
+    errores.push("iva_total debe ser numérico");
+  }
+
+  if (!factura.verifactu_hash) {
+    errores.push("verifactu_hash es obligatorio (lo genera Base44)");
+  }
+
+  return errores;
+}
+
+// ==========================
+//   CONSTRUCCIÓN XML ALTA
+//   (tu función, apenas tocada)
+// ==========================
+
 function construirXmlAlta(factura) {
   // ---- Emisor / obligado ----
   const obligadoNombre = factura.empresa_razon_social || "OBLIGADO EMISOR";
@@ -118,7 +215,6 @@ function construirXmlAlta(factura) {
   const sinIdentDest = factura.sin_identificacion_destinatario ? "S" : "N";
   const macrodato = factura.es_macrodato ? "S" : "N";
 
-  // EmitidaPorTerceroODestinatario: solo T o D si aplica, si no se omite
   const emitidaPorTerceroRaw = factura.emitida_por_tercero || "N";
   const debeInformarEmitidaPorTercero =
     emitidaPorTerceroRaw === "T" || emitidaPorTerceroRaw === "D";
@@ -221,11 +317,7 @@ function construirXmlAlta(factura) {
 
   // ---- Destinatarios: NIF o IDOtro ----
   let destinatarioXML = "";
-  if (
-    !clienteExtranjero &&
-    clienteNif &&
-    !factura.sin_identificacion_destinatario
-  ) {
+  if (!clienteExtranjero && clienteNif && !factura.sin_identificacion_destinatario) {
     destinatarioXML = `
         <sum1:Destinatarios>
           <sum1:IDDestinatario>
@@ -401,7 +493,10 @@ function construirXmlAlta(factura) {
   return xml;
 }
 
-// Llamada a la AEAT (entorno de pruebas) con MTLS
+// ==========================
+//   LLAMADA AEAT (PRE)
+// ==========================
+
 function enviarXmlAEAT(soapBody) {
   return new Promise((resolve, reject) => {
     const agent = crearAgenteMTLS();
@@ -417,9 +512,9 @@ function enviarXmlAEAT(soapBody) {
         "Content-Type": "text/xml; charset=utf-8",
         "Content-Length": bodyBuffer.length,
         "SOAPAction":
-          "https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SistemaFacturacion/altaRegistroFactura",
+          "https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SistemaFacturacion/altaRegistroFactura"
       },
-      timeout: 15000,
+      timeout: 15000
     };
 
     let respuestaAEAT = "";
@@ -434,7 +529,7 @@ function enviarXmlAEAT(soapBody) {
       response.on("end", () => {
         resolve({
           statusCode: response.statusCode,
-          body: respuestaAEAT,
+          body: respuestaAEAT
         });
       });
     });
@@ -453,18 +548,34 @@ function enviarXmlAEAT(soapBody) {
   });
 }
 
-// =====================================================
-//  ENDPOINT /factura (API KEY + mapeo Base44 + AEAT)
-// =====================================================
+// ==========================
+//   ENDPOINTS BÁSICOS
+// ==========================
 
-const API_KEY = process.env.FACTURA_API_KEY || null;
+app.get("/", (req, res) => {
+  const estado = certBuffer ? "CARGADO" : "NO CARGADO";
+  res.send("Microservicio Verifactu. Certificado: " + estado);
+});
+
+app.get("/test-mtls", (req, res) => {
+  try {
+    const agent = crearAgenteMTLS();
+    const ok = typeof agent.createConnection === "function";
+    res.send("Agente MTLS creado. createConnection=" + ok);
+  } catch (err) {
+    res.status(500).send("Error MTLS: " + err.message);
+  }
+});
+
+// ==========================
+//   ENDPOINT /factura
+// ==========================
 
 app.post("/factura", async (req, res) => {
-  // 1) Comprobamos API KEY
   if (!API_KEY) {
     return res.status(500).json({
       ok: false,
-      error: "FACTURA_API_KEY no configurada en el servidor",
+      error: "FACTURA_API_KEY no configurada en el servidor"
     });
   }
 
@@ -472,78 +583,24 @@ app.post("/factura", async (req, res) => {
   if (headerKey !== API_KEY) {
     return res.status(401).json({
       ok: false,
-      error: "No autorizado. API KEY incorrecta.",
+      error: "No autorizado. API KEY incorrecta."
     });
   }
 
-  // 2) Payload bruto que envía Base44
-  const p = req.body;
+  const payloadBase44 = req.body;
 
   console.log("### PAYLOAD RECIBIDO DE BASE44 ###");
-  console.log(JSON.stringify(p, null, 2));
+  console.log(JSON.stringify(payloadBase44, null, 2));
 
-  // 3) Adaptamos el payload "simple" de Base44
-  //    al objeto "factura" que usa construirXmlAlta()
-  const factura = {
-    // Identificación factura
-    numero_factura: p.numero_factura || p.factura_numero,
-    fecha_emision: p.fecha_emision,
-
-    // Emisor
-    empresa_cif: p.empresa_cif || p.nif_emisor,
-    empresa_razon_social: p.empresa_razon_social || p.nombre_emisor,
-
-    // Destinatario
-    cliente_nombre: p.cliente_nombre,
-    cliente_nif: p.cliente_nif,
-    cliente_es_extranjero: false, // de momento asumimos cliente nacional
-
-    // Importes
-    total: typeof p.total === "string" ? parseFloat(p.total) : p.total,
-    iva_total:
-      typeof p.iva_total === "string" ? parseFloat(p.iva_total) : p.iva_total,
-    base_neta:
-      typeof p.total === "number" && typeof p.iva_total === "number"
-        ? p.total - p.iva_total
-        : undefined,
-
-    // Campos VeriFactu
-    verifactu_hash: p.verifactu_hash || p.hash_verifactu,
-    verifactu_hash_anterior:
-      p.verifactu_hash_anterior || p.hash_anterior || "",
-    verifactu_es_primer_registro: !(p.hash_anterior || p.verifactu_hash_anterior),
-    verifactu_firma_fecha: new Date().toISOString(),
-
-    // Defaults razonables
-    tipo_factura: p.tipo_factura || "F1",
-    descripcion_operacion:
-      p.descripcion_operacion || "Operacion facturada desde Base44",
-  };
-
-  // 4) Validación sobre el objeto "factura" ya adaptado
-  const errores = [];
-  if (!factura.numero_factura)
-    errores.push("numero_factura es obligatorio");
-  if (!factura.fecha_emision)
-    errores.push("fecha_emision es obligatoria");
-
-  // cliente_nombre solo obligatorio si NO es factura sin identificación
-  if (!p.sin_identificacion_destinatario && !factura.cliente_nombre) {
-    errores.push(
-      "cliente_nombre es obligatorio salvo facturas sin identificación de destinatario"
-    );
-  }
-
-  if (typeof factura.total !== "number" || isNaN(factura.total)) {
-    errores.push("total debe ser numérico");
-  }
+  const factura = mapearBase44AFactura(payloadBase44);
+  const errores = validarFactura(factura);
 
   if (errores.length > 0) {
     console.log("❌ Factura inválida:", errores);
     return res.status(400).json({
       ok: false,
       error: "Factura inválida",
-      detalles: errores,
+      detalles: errores
     });
   }
 
@@ -557,31 +614,31 @@ app.post("/factura", async (req, res) => {
         cliente_nombre: factura.cliente_nombre,
         cliente_nif: factura.cliente_nif,
         total: factura.total,
-        iva_total: factura.iva_total,
+        iva_total: factura.iva_total
       },
       null,
       2
     )
   );
 
-  // 5) Envío a AEAT
   try {
     const xml = construirXmlAlta(factura);
     const resultadoAEAT = await enviarXmlAEAT(xml);
 
     const resumen =
-      resultadoAEAT.body && resultadoAEAT.body.length > 2000
-        ? resultadoAEAT.body.slice(0, 2000) + "\n...[truncado]..."
+      resultadoAEAT.body && resultadoAEAT.body.length > 4000
+        ? resultadoAEAT.body.slice(0, 4000) + "\n...[truncado]..."
         : resultadoAEAT.body || "";
 
     return res.status(200).json({
       ok: true,
       mensaje: "Factura enviada a AEAT (entorno pruebas)",
       factura_enviada: factura,
+      xml_enviado: xml,
       aeat: {
         httpStatus: resultadoAEAT.statusCode,
-        rawResponse: resumen,
-      },
+        rawResponse: resumen
+      }
     });
   } catch (err) {
     console.error("❌ Error al enviar factura a AEAT:", err.message);
@@ -589,14 +646,14 @@ app.post("/factura", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Error al enviar la factura a la AEAT",
-      detalle: err.message,
+      detalle: err.message
     });
   }
 });
 
-// =====================================================
-//               TEST AEAT MANUAL (debug)
-// =====================================================
+// ==========================
+//   TEST AEAT MANUAL
+// ==========================
 
 app.get("/test-aeat", async (req, res) => {
   try {
@@ -617,15 +674,15 @@ app.get("/test-aeat", async (req, res) => {
       verifactu_hash: "FAKEHASH1234567890",
       verifactu_es_primer_registro: true,
       verifactu_firma_fecha: "2025-01-01T12:00:00+01:00",
-      emitida_por_tercero: "N",
+      emitida_por_tercero: "N"
     };
 
     const xml = construirXmlAlta(facturaFake);
     const resultado = await enviarXmlAEAT(xml);
 
     const resumen =
-      resultado.body && resultado.body.length > 2000
-        ? resultado.body.slice(0, 2000) + "\n...[truncado]..."
+      resultado.body && resultado.body.length > 4000
+        ? resultado.body.slice(0, 4000) + "\n...[truncado]..."
         : resultado.body || "";
 
     res
@@ -643,10 +700,10 @@ app.get("/test-aeat", async (req, res) => {
   }
 });
 
-// =====================================================
-//                 INICIAR SERVIDOR
-// =====================================================
+// ==========================
+//   INICIAR SERVIDOR
+// ==========================
 
 app.listen(PORT, () => {
-  console.log(`Servidor escuchando en puerto ${PORT}`);
+  console.log(`Servidor Verifactu escuchando en puerto ${PORT}`);
 });
